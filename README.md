@@ -719,6 +719,19 @@ radar stack.
 
 ---
 
+## Contributing
+
+Contributions are welcome, and **[CONTRIBUTING.md](CONTRIBUTING.md) is written for
+students joining the project** — environment setup, the workflow for submitting a
+change, how to add a test, and the project conventions that exist for scientific
+rather than stylistic reasons (colourblind-safe colormaps, UTM figures, lazy
+imports, and why radar intensities need gauge validation before you trust them).
+
+Two things to know up front: **never commit an API token**, and **never commit
+data** — this tool downloads gigabytes, and `.gitignore` is set up to keep it out.
+
+---
+
 ## License & credits
 
 Released under the **[MIT License](LICENSE)** — use, modify, and redistribute

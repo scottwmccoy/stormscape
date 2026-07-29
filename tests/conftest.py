@@ -90,14 +90,6 @@ def minute_series():
     return make
 
 
-def has_module(name: str) -> bool:
-    import importlib.util
-    try:
-        return importlib.util.find_spec(name) is not None
-    except (ImportError, ValueError):
-        return False
-
-
 def pytest_configure(config):
     config.addinivalue_line("markers", "network: needs internet (skipped by default)")
     config.addinivalue_line("markers", "optional_deps: needs an optional dependency")
