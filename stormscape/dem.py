@@ -17,7 +17,6 @@ import time
 import warnings
 
 import numpy as np
-import py3dep
 import rioxarray  # noqa: F401  (registers the .rio accessor on xarray objects)
 import xarray as xr
 from matplotlib.colors import LightSource
@@ -30,6 +29,24 @@ warnings.filterwarnings("ignore")
 STD_RESOLUTIONS = (60, 30, 10, 5, 3, 1)
 
 
+def _py3dep():
+    """Import py3dep on first use.
+
+    py3dep pulls in the whole HyRiver stack, but it is only needed for the
+    *network* 3DEP fetches in this module -- so importing it lazily keeps
+    ``import stormscape`` (and everything that does not touch 3DEP: MRMS,
+    gauges, smoothing, export, plotting) working without it, mirroring how
+    :mod:`stormscape.nexrad` defers ``arm_pyart``/``nexradaws``.
+    """
+    try:
+        import py3dep
+    except ImportError as e:                              # pragma: no cover
+        raise ImportError(
+            "py3dep is required for 3DEP DEM access. Install it with\n"
+            "  conda install -c conda-forge py3dep") from e
+    return py3dep
+
+
 def dem_sources(aoi, res=None):
     """Query 3DEP source footprints over an AOI (which lidar projects cover it).
 
@@ -38,7 +55,7 @@ def dem_sources(aoi, res=None):
     one or more resolution strings. Useful before committing to a 1 m fetch.
     """
     bounds, _ = load_aoi(aoi)
-    return py3dep.query_3dep_sources(bounds, crs=4326, res=res)
+    return _py3dep().query_3dep_sources(bounds, crs=4326, res=res)
 
 
 def coverage_fraction(aoi, res="1m"):
@@ -51,7 +68,7 @@ def coverage_fraction(aoi, res="1m"):
     if geom is None:
         geom = bbox_polygon(bounds)
     try:
-        src = py3dep.query_3dep_sources(bounds, crs=4326, res=res)
+        src = _py3dep().query_3dep_sources(bounds, crs=4326, res=res)
     except Exception:                                  # noqa: BLE001
         return 0.0
     if src is None or not len(src):
@@ -97,8 +114,8 @@ def get_dem(aoi, resolution=10, dst_crs="EPSG:5070", pad_deg=0.02,
     bounds, geom = load_aoi(aoi, pad_deg=pad_deg)
     for attempt in range(retries + 1):
         try:
-            dem = py3dep.get_dem(bbox_polygon(bounds), resolution=resolution,
-                                 crs=4326)
+            dem = _py3dep().get_dem(bbox_polygon(bounds),
+                                    resolution=resolution, crs=4326)
             break
         except Exception:                      # noqa: BLE001  (WMS timeout, etc.)
             if attempt >= retries:

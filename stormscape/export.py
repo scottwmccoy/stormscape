@@ -121,7 +121,12 @@ def _colormap_rgba(arr, cmap, vmin, vmax, norm=None, mask_below=None):
         norm = Normalize(vmin=vmin, vmax=vmax)
     a = np.asarray(arr, dtype=float)
     n = np.ma.filled(norm(np.ma.masked_invalid(a)).astype(float), np.nan)
-    rgba = (cmap_obj(np.nan_to_num(n, nan=0.0)) * 255).astype(np.uint8)
+    # Normalizers may return +/-inf for values outside [vmin, vmax] (TwoSlopeNorm
+    # does), and NaN for the masked cells. Resolve both explicitly and clip to the
+    # unit interval so out-of-range values take the end colours -- what imshow
+    # shows -- instead of overflowing inside the colormap lookup.
+    n = np.clip(np.nan_to_num(n, nan=0.0, posinf=1.0, neginf=0.0), 0.0, 1.0)
+    rgba = (cmap_obj(n) * 255).astype(np.uint8)
     alpha = np.where(np.isfinite(a), 255, 0)
     if mask_below is not None:
         alpha = np.where(a < float(mask_below), 0, alpha)

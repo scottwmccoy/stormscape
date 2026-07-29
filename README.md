@@ -1,5 +1,9 @@
 # stormscape
 
+[![tests](https://github.com/scottwmccoy/stormscape/actions/workflows/ci.yml/badge.svg)](https://github.com/scottwmccoy/stormscape/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 Terrain + radar-rainfall mapping from public US datasets, in one small package.
 
 Given an **area of interest** (a bounding box, a shapefile/GeoJSON, or a
@@ -679,6 +683,39 @@ stormscape/
 ├── environment.yml      conda-forge environment ("stormscape")
 └── pyproject.toml
 ```
+
+---
+
+## Tests
+
+```bash
+pip install -e ".[test]"
+pytest
+```
+
+The suite is **entirely offline** — no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14 requests
+and no API token — so it runs anywhere in a couple of seconds. It checks the
+science math against known answers rather than just importing things:
+
+| Area | What is pinned down |
+|---|---|
+| i15 estimator | a constant rate round-trips exactly; only the trailing 16 min counts; missing steps don't poison the sum |
+| smoothing | radius 0 is the identity; a NaN hole never zero-bleeds; peaks are monotone-decreasing in radius; a δ-spike stays symmetric |
+| recurrence | every tabulated quantile inverts to its own ARI; sub-1-year intervals stay numeric and continuous across the 1-yr knot |
+| gauges | cadence is measured on *precip-bearing* rows (the multi-variable ASOS trap); case-only station-name collisions stay distinct; the storm window ignores stray tips |
+| comparison | bias/RMSE/ratio arithmetic; the RQI and cadence screens; cadence must **not** filter the storm total |
+| merging | mean-field factor is Σgauge/Σradar; leave-one-out beats the raw field on bias |
+| export | EPSG:3857 output; dry and no-data cells are transparent; categorical fields use nearest-neighbour; the GeoPDF neatline bounds the map frame |
+| CLI | all 15 subcommands build; documented flags still exist on every command |
+
+Tests needing an optional dependency (Py-ART, wradlib, GDAL's PDF driver) are
+marked `optional_deps` and skip themselves. Anything hitting the network would be
+marked `network`; CI runs `-m "not network"`.
+
+**CI** runs the suite on Python 3.10 and 3.13 on every push and pull request
+(`.github/workflows/ci.yml`), installing via plain `pip` — so it also proves that
+`pip install stormscape` works and that the package imports without the optional
+radar stack.
 
 ---
 

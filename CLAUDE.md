@@ -768,11 +768,46 @@ in `README.md`.
   validated:** clip → 1495 flowlines (206 named / 1289 unnamed), 100% within the AOI
   polygon; bbox → 1801 (whole flowlines). Deliverable `HiddenValley_streams.geojson`
   (3.5 MB) in the Box RD.
-- **Verification is visual** — there is no committed test suite yet, but new
-  code is validated with throwaway scripts (FlowAlert fixtures for parsing
-  parity; synthetic known-answer series for the intensity/stats math; a live
-  Hidden Valley run for end-to-end). Render figures and inspect them. Keep
-  outputs (`*.tif`, large rasters) out of git.
+- **Testing (`tests/`, pytest, added 2026-07-29) — run it before every push.**
+  `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **232 tests,
+  ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14 request, no
+  token), so it is cheap enough to run constantly. Config lives in
+  `pyproject.toml` (`[tool.pytest.ini_options]`, `--strict-markers`); install the
+  deps with `pip install -e ".[test]"`. Tests encode the **documented invariants**
+  from this file, not implementation details: the i15 estimator round-trip, the
+  smoothing guarantees (radius-0 identity, no NaN zero-bleed, monotone peak
+  reduction, δ-spike symmetry), sub-1-yr recurrence continuity, the precip-bearing
+  cadence rule, case-only filename collisions, mass-weighted storm windows, the
+  RQI/cadence screens (and that cadence must *not* filter `total`), the
+  3857/RGBA-transparency export contract, and that all 15 subcommands still parse.
+  Markers: `optional_deps` (Py-ART/wradlib/GDAL-PDF — self-skipping) and `network`
+  (deselected in CI via `-m "not network"`). **Fixtures over live data:**
+  `conftest.py` factories write synthetic GeoTIFFs/gauge frames to `tmp_path`; don't
+  reach into the Box event folder from a test.
+  **CI** (`.github/workflows/ci.yml`) runs the suite on **Python 3.10 + 3.13** on
+  every push/PR via **plain pip** (`pip install -e ".[test]"`), which also guards
+  two contracts: that `pip install stormscape` actually resolves, and that
+  `import stormscape` + every CLI parser works with **none** of the optional radar
+  stack installed. Two packaging bugs were found precisely this way — see below.
+- **Packaging gotchas (found by testing `pip install` in a clean venv, 2026-07-29):**
+  (1) in `pyproject.toml` the `dependencies` key must come **before** any
+  sub-table like `[project.urls]`, or TOML parses it as `project.urls.dependencies`
+  and the build dies; (2) under **PEP 639** a `license = "MIT"` expression and a
+  `"License :: OSI Approved :: ..."` classifier **cannot coexist** — modern
+  setuptools errors out, so the classifier is gone. Also `scipy` was missing from
+  the core deps even though `smoothing.py` imports it at module level (so a
+  no-extras `pip install` broke `import stormscape`); it is now required.
+  **Always validate a packaging change with a throwaway venv**, not just the
+  already-populated GISMan env, which masks missing dependencies.
+- **`py3dep` is imported lazily** (`dem._py3dep()`, 2026-07-29) even though it is
+  a required dependency — it drags in ~35 HyRiver packages, and deferring it keeps
+  `import stormscape` fast and turns a broken HyRiver install into a clear
+  "install py3dep" error instead of an unusable package. Same pattern as
+  `nexrad`'s `arm_pyart`/`nexradaws` and `export`'s `osgeo`.
+- **Verification is also visual** — the pytest suite covers the math and the
+  plumbing, but figures still need looking at. Render them and inspect (FlowAlert
+  fixtures for parsing parity; a live Hidden Valley run for end-to-end). Keep
+  outputs (`*.tif`, large rasters, caches) out of git.
 
 ## Provenance
 

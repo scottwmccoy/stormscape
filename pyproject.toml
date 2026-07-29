@@ -13,25 +13,26 @@ license = "MIT"
 license-files = ["LICENSE"]
 keywords = ["MRMS", "NEXRAD", "3DEP", "DEM", "rainfall", "radar", "QPE",
             "rain gauge", "Atlas 14", "i15", "debris flow", "hillshade"]
+# NB: no "License :: ..." classifier -- PEP 639 supersedes it with the `license`
+# expression above, and modern setuptools errors if both are present.
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Atmospheric Science",
     "Topic :: Scientific/Engineering :: GIS",
 ]
 
-[project.urls]
-Homepage = "https://github.com/scottwmccoy/stormscape"
-Repository = "https://github.com/scottwmccoy/stormscape"
-Documentation = "https://github.com/scottwmccoy/stormscape/blob/main/docs/cli.md"
-Issues = "https://github.com/scottwmccoy/stormscape/issues"
-
-# The geospatial stack (py3dep/rioxarray/rasterio-with-GRIB/geopandas) is best
-# installed with conda from conda-forge -- see environment.yml. These pins are
-# the floor versions the code was developed against; pip-installing them is
-# possible but the conda route is recommended (GRIB driver for MRMS).
+# The geospatial stack (rioxarray/rasterio-with-GRIB/geopandas) is best installed
+# with conda from conda-forge -- see environment.yml. These pins are the floor
+# versions the code was developed against; pip-installing them works, but the
+# conda route is recommended (it supplies GDAL's GRIB driver, which MRMS needs).
+#
+# Everything listed here is imported at `import stormscape` time or by the
+# default `run` pipeline, so all of it is genuinely required. scipy backs
+# stormscape.smoothing; py3dep backs the 3DEP DEM fetch behind `dem`/`run`
+# (imported lazily, so a broken HyRiver install degrades to a clear error rather
+# than breaking the whole package).
 dependencies = [
     "numpy>=1.24",
     "pandas>=2.0",
@@ -42,8 +43,17 @@ dependencies = [
     "rasterio>=1.3",
     "geopandas>=0.13",
     "shapely>=2.0",
+    "scipy>=1.10",
     "py3dep>=0.16",
 ]
+
+# NB: [project.urls] and every other table must come AFTER the `dependencies`
+# key, or TOML reads it as `project.urls.dependencies` and the build fails.
+[project.urls]
+Homepage = "https://github.com/scottwmccoy/stormscape"
+Repository = "https://github.com/scottwmccoy/stormscape"
+Documentation = "https://github.com/scottwmccoy/stormscape/blob/main/docs/cli.md"
+Issues = "https://github.com/scottwmccoy/stormscape/issues"
 
 [project.optional-dependencies]
 # Labelled open-source basemap (place names / rivers / roads) under the
@@ -55,6 +65,9 @@ basemap = ["contextily>=1.5"]
 # conda-forge for the binary stack: conda install -c conda-forge arm_pyart.
 # wradlib adds DEM beam-blockage (intensity_stack blockage_dem=/beam_blockage).
 nexrad = ["nexradaws>=2.0", "arm_pyart>=1.11", "scipy>=1.10", "wradlib>=2.0"]
+# Offline test suite. scipy is needed by stormscape.smoothing; pyogrio gives
+# geopandas a fast vector driver for the AOI round-trip tests.
+test = ["pytest>=7.0", "scipy>=1.10", "pyogrio>=0.7"]
 
 [project.scripts]
 stormscape = "stormscape.cli:main"
@@ -65,3 +78,14 @@ packages = ["stormscape"]
 [tool.setuptools.package-data]
 # Bundled WSR-88D site table (id, lat, lon, elev_m) used by nexrad.nearest_radar.
 stormscape = ["data/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# -ra shows a short summary of non-passing tests; strict markers catch typos in
+# @pytest.mark.* rather than silently ignoring the mark.
+addopts = "-ra --strict-markers"
+markers = [
+    "network: needs internet access (deselected by default in CI)",
+    "optional_deps: needs an optional dependency (Py-ART, wradlib, GDAL PDF)",
+]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
