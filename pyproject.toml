@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stormscape"
+version = "0.1.0"
+description = "Storm rainfall from public US radar, gauges, and climatology — analyzed and mapped over terrain"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Scott McCoy", email = "scottmccoy@unr.edu" }]
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["MRMS", "NEXRAD", "3DEP", "DEM", "rainfall", "radar", "QPE",
+            "rain gauge", "Atlas 14", "i15", "debris flow", "hillshade"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+
+[project.urls]
+Homepage = "https://github.com/scottwmccoy/stormscape"
+Repository = "https://github.com/scottwmccoy/stormscape"
+Documentation = "https://github.com/scottwmccoy/stormscape/blob/main/docs/cli.md"
+Issues = "https://github.com/scottwmccoy/stormscape/issues"
+
+# The geospatial stack (py3dep/rioxarray/rasterio-with-GRIB/geopandas) is best
+# installed with conda from conda-forge -- see environment.yml. These pins are
+# the floor versions the code was developed against; pip-installing them is
+# possible but the conda route is recommended (GRIB driver for MRMS).
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "requests>=2.28",
+    "matplotlib>=3.7",
+    "xarray>=2023.1",
+    "rioxarray>=0.14",
+    "rasterio>=1.3",
+    "geopandas>=0.13",
+    "shapely>=2.0",
+    "py3dep>=0.16",
+]
+
+[project.optional-dependencies]
+# Labelled open-source basemap (place names / rivers / roads) under the
+# figure. Optional: the DEM and MRMS parts work without it.
+basemap = ["contextily>=1.5"]
+# Single-radar NEXRAD Level II access (stormscape.nexrad). arm_pyart reads the
+# volumes; nexradaws (v2+, the current unidata-nexrad-level2 bucket) is the AWS
+# transport and is pip-only -- not on conda-forge. Install arm_pyart from
+# conda-forge for the binary stack: conda install -c conda-forge arm_pyart.
+# wradlib adds DEM beam-blockage (intensity_stack blockage_dem=/beam_blockage).
+nexrad = ["nexradaws>=2.0", "arm_pyart>=1.11", "scipy>=1.10", "wradlib>=2.0"]
+
+[project.scripts]
+stormscape = "stormscape.cli:main"
+
+[tool.setuptools]
+packages = ["stormscape"]
+
+[tool.setuptools.package-data]
+# Bundled WSR-88D site table (id, lat, lon, elev_m) used by nexrad.nearest_radar.
+stormscape = ["data/*.csv"]

@@ -1,0 +1,25 @@
+region,description,west,south,east,north
+ak,Alaska (0-360 lon grid),172.3458,50.4958,237.0042,72.1792
+as,American Samoa,-170.8508,-14.3808,-170.5333,-14.2133
+ch,Chuuk (Federated States of Micronesia),151.0,5.0,154.1,8.1
+gu,Guam,144.554,13.1762,145.0265,13.7037
+hi,Hawaiian Islands,-160.2604,18.9104,-154.8021,22.2438
+inw,"Interior Northwest (ID, MT, WY, E OR/WA, NE NV)",-117.2542,40.9875,-104.0292,49.0125
+ko,Kosrae (Federated States of Micronesia),162.8918,5.229,163.0443,5.3815
+mw,Midwestern States,-109.3625,33.3125,-82.3719,49.4285
+ne,Northeastern States,-82.2958,38.4958,-66.4792,48.7458
+nk,Pacific island (NOAA Atlas 14 Vol 5),154.923,3.8,155.0255,3.9025
+nmi,Northern Mariana Islands,145.0576,14.0549,145.8726,15.3424
+orb,Ohio River Basin & surrounding states,-91.5376,31.9566,-73.8743,42.5296
+pg,Pacific island (NOAA Atlas 14 Vol 5),160.6539,6.1607,160.7564,6.2632
+pl,Palau,134.0971,6.8585,134.6646,7.801
+pp,Pohnpei (Federated States of Micronesia),158.0571,6.749,158.3646,7.0565
+pr,Puerto Rico & US Virgin Islands,-67.2867,17.6692,-64.5608,18.5292
+rm,Republic of the Marshall Islands,161.0,5.0,173.1,13.1
+se,Southeastern States,-94.9208,24.4625,-79.9547,36.7953
+sw,"Semiarid Southwest + California (AZ, CA, NV, NM, UT)",-124.7542,31.3292,-102.9876,42.9708
+tx,Texas,-106.6542,25.8292,-93.4958,36.5125
+ul,Pacific island (NOAA Atlas 14 Vol 5),139.7416,9.9704,139.8441,10.0729
+wki,Wake Island,166.5825,19.2633,166.6775,19.3408
+wl,Pacific island (NOAA Atlas 14 Vol 5),143.8613,7.3297,143.9638,7.4322
+yp,Yap (Federated States of Micronesia),138.0263,9.4157,138.2188,9.6657

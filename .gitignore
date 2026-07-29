@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Data products / run outputs (large rasters, radar grib) — keep out of git
+*.tif
+*.tiff
+*.grib2
+*.grib2.gz
+stormscape_out/
+out/
+
+# Download / request caches (these grow to many GB — never commit)
+cache/
+*_cache/
+atlas14_cache/
+nexrad_cache/
+*.sqlite
+
+# Scratch / working files
+scratchpad/
+
+# Gauge series pulled from Synoptic (regenerate with `gauges`; may be large)
+RainGaugeData/
+VirtualGaugeFigures/
+
+# Sample figures can still be committed with `git add -f *.png`

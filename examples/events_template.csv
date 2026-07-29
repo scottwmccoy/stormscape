@@ -1,0 +1,3 @@
+key,name,date,start,end,aoi,bbox_w,bbox_s,bbox_e,bbox_n,out_dir,perimeters,resolution,source,radar,method,notes
+HiddenValley,"Hidden Valley, NV — peak i15 (2026-06-19)",20260619,,,./aoi/HiddenValley_AOI.kmz,,,,,./out/HiddenValley,./aoi/HiddenValley_AOI.kmz,10,mrms,,,real example — MRMS era; AOI + perimeter from the KMZ
+ExamplePre2020,(example) pre-2020 storm — single-radar NEXRAD,20190705,2.01907E+11,2.01907E+11,,-119.7406,39.3304,-119.4536,39.8777,,,10,nexrad,,kdp,EXAMPLE — edit or delete; pre-2020 so MRMS is unavailable and source=nexrad uses the Level II i15 stack; window set via start/end

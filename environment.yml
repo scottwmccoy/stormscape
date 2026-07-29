@@ -1,0 +1,38 @@
+# Recreate the runtime environment for stormscape from conda-forge.
+#   conda env create -f environment.yml
+#   conda activate stormscape
+#   pip install -e .            # installs stormscape + the `stormscape` CLI
+#
+# libgdal-grib is the key extra: it gives rasterio's bundled GDAL the GRIB
+# driver needed to read NOAA MRMS .grib2 files. Without it the DEM/figure
+# parts still work but MRMS reads will fail. libgdal-pdf adds GDAL's PDF driver
+# so the `export` command can write GeoPDFs (optional; the 3857 GeoTIFF export
+# and everything else work without it).
+name: stormscape
+channels:
+  - conda-forge
+dependencies:
+  - python=3.13
+  - numpy
+  - pandas
+  - requests
+  - matplotlib
+  - xarray
+  - rioxarray
+  - rasterio
+  - libgdal-grib   # GRIB driver for GDAL -> read NOAA MRMS .grib2 (required for MRMS)
+  - libgdal-pdf    # PDF driver for GDAL -> write GeoPDFs (stormscape export; optional)
+  - geopandas
+  - pyogrio
+  - shapely
+  - py3dep        # HyRiver 3DEP / The National Map client
+  - contextily    # open-source basemap tiles for the figure overlay
+  - arm_pyart     # read single-radar NEXRAD Level II volumes (stormscape.nexrad)
+  - boto3         # AWS transport for nexradaws
+  - pytz          # nexradaws timestamps
+  - scipy         # nearest-gate sampling/gridding in nexrad
+  - wradlib       # DEM beam-blockage for the single-radar intensity stack
+  - pip
+  - pip:
+      - nexradaws  # NEXRAD L2 on AWS (unidata-nexrad-level2); pip-only, not on conda-forge
+      - -e .
