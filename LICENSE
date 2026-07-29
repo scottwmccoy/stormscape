@@ -19,18 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Third-party code incorporated in this project:
-
-* stormscape/gauges.py -- the Synoptic/MesoWest gauge transport and the
-  1-minute precipitation interpolation are adapted from the USGS **FlowAlert**
-  project, released into the public domain under CC0 1.0 Universal.
-* stormscape/mrms.py -- the peak-i15 estimator follows the MRMS stacking
-  approach of D. Cavagna (MRMS_stack.py), used with permission.
-
-Public data accessed by this software (USGS 3DEP / The National Map, NOAA MRMS,
-NOAA NEXRAD Level II, NOAA Atlas 14, USGS NHD, US Census TIGER/Line, USGS GNIS)
-is in the public domain. The Synoptic / MesoWest API requires the user's own
-token and is subject to Synoptic Data's terms of service.

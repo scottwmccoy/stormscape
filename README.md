@@ -658,20 +658,40 @@ kept, and 2-min `PrecipRate` is stacked over each contiguous wet run.
 ## Layout
 
 ```
-i15_toolkit/
+stormscape/
 ├── stormscape/
-│   ├── aoi.py     AOI parsing (bbox / vector / geometry) + overlay loading
-│   ├── dem.py     3DEP DEM download, 1 m availability, hillshade
-│   ├── mrms.py    MRMS fetch/stack -> i15/i30/i60 fields + MultiSensor (engine)
-│   ├── gauges.py  Synoptic/MesoWest gauges -> total + peak 15/30/60 intensities
-│   ├── compare.py sample radar at gauges -> residuals + skill stats
-│   ├── nexrad.py  single-radar NEXRAD Level II tilts (nexradaws + Py-ART)
-│   ├── atlas14.py NOAA Atlas 14 climatology grids -> intensity fields + anomaly
-│   ├── refdata.py AOI-scoped NHD streams / TIGER roads / GNIS places
-│   ├── plot.py    drape i15 over hillshade + basemap/vector/gauge overlays
-│   ├── data/      bundled tables (nexrad_sites.csv, atlas14_regions.csv)
-│   └── cli.py     `stormscape {dem,i15,map,run,gauges,compare,nexrad,panels,vgauge,zoom,pick,climate,smooth,recurrence}`
-├── examples/example_cameron_peak.py
-├── environment.yml
+│   ├── aoi.py       AOI parsing (bbox / vector / geometry) + overlay loading
+│   ├── dem.py       3DEP DEM download, 1 m availability, hillshade
+│   ├── mrms.py      MRMS fetch/stack -> i15/i30/i60 fields + MultiSensor (engine)
+│   ├── nexrad.py    single-radar NEXRAD Level II tilts + intensity stacks
+│   ├── gauges.py    Synoptic/MesoWest gauges -> total + peak 15/30/60 intensities
+│   ├── compare.py   sample radar at gauges -> residuals, skill stats, recurrence
+│   ├── merge.py     radar-gauge bias correction + conditional merge
+│   ├── atlas14.py   NOAA Atlas 14 climatology grids -> intensity fields + anomaly
+│   ├── smoothing.py NaN-aware field smoothing + radar-gauge skill sweep
+│   ├── export.py    EPSG:3857 GeoTIFFs, GeoPDF figures, NHD stream vectors
+│   ├── refdata.py   AOI-scoped NHD streams / TIGER roads / GNIS places
+│   ├── plot.py      drape fields over hillshade + basemap/vector/gauge overlays
+│   ├── data/        bundled tables (nexrad_sites.csv, atlas14_regions.csv)
+│   └── cli.py       15 subcommands (see docs/cli.md)
+├── examples/            worked example + batch event templates
+├── docs/cli.md          full CLI reference
+├── environment.yml      conda-forge environment ("stormscape")
 └── pyproject.toml
 ```
+
+---
+
+## License & credits
+
+Released under the **[MIT License](LICENSE)** — use, modify, and redistribute
+freely with attribution.
+
+Third-party code and the terms of every data source are recorded in
+**[NOTICE.md](NOTICE.md)**. In brief: the gauge transport is adapted from USGS
+**FlowAlert** (CC0), the i15 estimator follows D. Cavagna's MRMS stacking
+approach, and all data is public-domain US government data — *except* the
+Synoptic / MesoWest gauge API, which needs your own free token.
+
+If this contributes to published work, please cite the repository and the
+underlying data products (see [NOTICE.md](NOTICE.md#citing-this-software)).
