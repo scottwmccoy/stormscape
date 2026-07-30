@@ -1,0 +1,165 @@
+name: Bug report
+description: Something crashed, produced a wrong number, or drew a wrong map
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. The fields below are the ones that make a bug
+        reproducible — an AOI and a date are usually enough for someone else to
+        see the same failure.
+
+        > [!CAUTION]
+        > **Redact your Synoptic token** before pasting any command. Replace it
+        > with `$SYNOPTIC_TOKEN`. Anything posted in a public issue is public
+        > permanently, and a leaked token has to be revoked and reissued.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before filing
+      options:
+        - label: I removed my API token from everything I pasted below
+          required: true
+        - label: >-
+            I tried again at least once. Several data services are genuinely
+            flaky — the 3DEP 1 m endpoint times out, MRMS returns 404 for
+            intervals that simply have no data, and the NHD endpoint sometimes
+            returns nothing.
+          required: true
+        - label: >-
+            I am on a recent `main` (or I have noted my version below)
+          required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: >-
+        For a wrong *number* or a wrong *map*, say what you saw and what you
+        expected instead — a screenshot of the figure helps a lot.
+      placeholder: |
+        `stormscape run` finished, but the i15 field is zero everywhere even
+        though the gauges recorded 30 mm. I expected a convective core near the
+        south end of the AOI.
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command you ran
+      description: Token redacted. If you used the Python API, paste the script instead.
+      render: shell
+      placeholder: |
+        python -m stormscape run \
+          --bbox -119.7406 39.3304 -119.4536 39.8777 \
+          --date 20260619 --resolution 10 \
+          --out-dir ./out --key myevent --reference --clip
+    validations:
+      required: true
+
+  - type: input
+    id: aoi
+    attributes:
+      label: Area of interest
+      description: >-
+        The `--bbox W S E N` values, or a description of the AOI file (its
+        bounds, roughly where it is). This is what lets someone reproduce it.
+      placeholder: "--bbox -119.7406 39.3304 -119.4536 39.8777  (Reno, NV area)"
+    validations:
+      required: true
+
+  - type: input
+    id: date
+    attributes:
+      label: Storm date (or start/end window)
+      description: >-
+        MRMS 2-minute data is only reliable from about October 2020 onward; for
+        earlier storms use the single-radar NEXRAD path (`nexrad --intensity`).
+      placeholder: "20260619   (or --start 202606192000 --end 202606200200)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: subcommand
+    attributes:
+      label: Which subcommand(s) are involved?
+      multiple: true
+      options:
+        - dem
+        - i15
+        - map
+        - run
+        - gauges
+        - compare
+        - nexrad
+        - panels
+        - vgauge
+        - zoom
+        - pick
+        - climate
+        - smooth
+        - recurrence
+        - export
+        - "Python API (not the CLI)"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: traceback
+    attributes:
+      label: Full error message and traceback
+      description: >-
+        The whole thing, not just the last line — the frames above it are usually
+        where the cause is. Leave blank if there was no error (a wrong result
+        rather than a crash).
+      render: text
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Paste the output of:
+
+        ```bash
+        python -c "import sys; print(sys.version)"
+        python -c "import stormscape, rasterio, geopandas, numpy; print('stormscape', stormscape.__version__); print('GDAL', rasterio.__gdal_version__, '| rasterio', rasterio.__version__); print('geopandas', geopandas.__version__, '| numpy', numpy.__version__)"
+        ```
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS
+        - Windows
+        - Linux
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - "conda env create -f environment.yml (recommended)"
+        - "pip install -e . into an existing conda environment"
+        - "pip install into a plain virtualenv"
+        - "Other / not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: >-
+        Screenshots of a wrong figure, whether it worked before, whether it fails
+        for every AOI or just this one — all useful.

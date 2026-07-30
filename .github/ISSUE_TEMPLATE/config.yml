@@ -1,0 +1,14 @@
+# Blank issues stay enabled on purpose: CONTRIBUTING.md tells students that a
+# half-formed question is fine, and a form should never be the barrier to asking.
+blank_issues_enabled: true
+
+contact_links:
+  - name: CLI reference
+    url: https://github.com/scottwmccoy/stormscape/blob/main/docs/cli.md
+    about: Every subcommand and flag, with the outputs each one writes.
+  - name: Contributing guide
+    url: https://github.com/scottwmccoy/stormscape/blob/main/CONTRIBUTING.md
+    about: Environment setup, running the tests, and how to submit a change.
+  - name: Worked example
+    url: https://github.com/scottwmccoy/stormscape/blob/main/examples/HiddenValley_20260619/RUN_COMMANDS.md
+    about: A real end-to-end storm, as copyable commands.

@@ -1,0 +1,90 @@
+name: Feature request
+description: Propose a new capability, data source, or output
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Good feature requests here usually start from a **question you're trying
+        to answer**, not from a implementation idea — that way the design can be
+        argued about before anyone writes code.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to find out?
+      description: >-
+        The scientific or practical question. What would you do with the output?
+      placeholder: >-
+        I want to know whether a storm's peak intensity exceeded the threshold
+        that triggered debris flows at a nearby site, across ~20 events, without
+        re-running the whole pipeline by hand for each one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current
+    attributes:
+      label: How do you do it today?
+      description: >-
+        The workaround, the manual steps, or "it isn't possible". This tells us
+        how much the feature actually saves.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the package would this touch?
+      multiple: true
+      options:
+        - "dem — terrain / 3DEP"
+        - "mrms — mosaic radar rainfall"
+        - "nexrad — single-radar Level II"
+        - "gauges — Synoptic rain gauges"
+        - "compare / merge — radar vs gauge, bias correction"
+        - "atlas14 — climatology and recurrence"
+        - "smoothing"
+        - "export — GeoTIFF / GeoPDF / vectors"
+        - "plot — figures and maps"
+        - "cli — a new or changed subcommand"
+        - "docs"
+        - "Not sure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would it look like? (optional)
+      description: >-
+        A sketch of the command, the flag, or the function signature you'd want.
+        Rough is fine.
+      render: shell
+      placeholder: |
+        stormscape batch --events events.csv --out-dir ./out --compare
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References (optional)
+      description: >-
+        Papers, data-product documentation, or an existing implementation. For a
+        new data source, a link to its API or download endpoint is the most
+        useful thing you can include.
+
+  - type: dropdown
+    id: help
+    attributes:
+      label: Would you like to work on it?
+      description: >-
+        Either answer is fine. See CONTRIBUTING.md if you'd like to try — for a
+        substantial change, discussing the approach in this issue first will save
+        you effort.
+      options:
+        - "Yes, I'd like to try it"
+        - "Yes, with some guidance"
+        - "No, just proposing it"
+    validations:
+      required: true

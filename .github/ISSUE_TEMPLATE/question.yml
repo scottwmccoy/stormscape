@@ -1,0 +1,38 @@
+name: Question
+description: Ask how to do something, or whether a result looks right
+title: "[question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ask away — a half-formed question is completely fine, and "is this number
+        plausible?" is a good use of this tracker.
+
+        > [!CAUTION]
+        > **Redact your Synoptic token** from anything you paste. Replace it with
+        > `$SYNOPTIC_TOKEN`.
+
+        Two things worth checking first, because they come up often:
+        - **Radar over-reads rainfall in hail.** On the bundled Hidden Valley
+          event the radar ran 2–4× the ground gauges. That is real QPE physics,
+          not a bug — see the radar-vs-gauge section of the README.
+        - **Coarse-reporting gauges under-read short-duration peaks.** A gauge
+          that only reports hourly has its bursts smeared by the 1-minute
+          interpolation, so its i15 reads low. The storm total is unaffected.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: What would you like to know?
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: What have you run so far? (optional)
+      description: >-
+        The command, the AOI and date, and any numbers or figures you're looking
+        at. Token redacted.
+      render: shell
