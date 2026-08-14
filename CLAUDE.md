@@ -455,6 +455,42 @@ in `README.md`.
   slow part; a quick `get_dem(box, resolution=1, retries=0)` ~70 Mpx probe in ~60 s
   is a good health check before committing). 1 m DEM/hillshade tifs are big — keep
   them out of git.
+- **NEVER let rioxarray pick the resampling on a DEM (2026-07-31) — `dem.get_dem`
+  no longer calls `py3dep.get_dem` at 10/30/60 m.** Found from finished figures:
+  every coarse hillshade carried *two* nearest-neighbour artefacts, while 1 m
+  hillshades were clean.
+  **(A) a ~45° "corduroy" hatch on smooth slopes** — `py3dep.get_dem` internally
+  does `static_3dep_dem(...).rio.reproject(5070)` with rioxarray's **default
+  (nearest)** resampling and **no target resolution**. The seamless 3DEP VRT is
+  **EPSG:4269 at ⅓ arc-second**, so that warp is a rotation plus a non-integer
+  scale and nearest aliases along diagonals. It also lands on an arbitrary
+  **~9.38 m** grid, not the 10 m requested.
+  **(B) an axis-aligned ~15-px grid** — warping that 9.38 m to 10.0 m, nearest
+  again: 10/9.3817 = 1.0659, so one row and column is dropped every ~15 cells.
+  **Why 1 m was clean:** resolutions **outside {10, 30, 60}** route to the
+  *dynamic* 3DEP image service, which resamples server-side and returns 5070
+  directly — no client-side nearest warp at all.
+  **Fix:** read the VRT via `py3dep.static_3dep_dem` on its **native 4269 grid**
+  (+20 cells so the kernel never reaches past the data), warp **exactly once**
+  with `resampling=` (new arg, default `DEFAULT_RESAMPLING = bilinear`), then trim.
+  `_needs_warp` skips the warp entirely when the DEM already arrives on the target
+  CRS *and* within 1% of the target spacing — the dynamic path usually does.
+  **Bilinear over cubic:** cubic overshoots at cliffs and the hillshade turns that
+  into bright rims, for a 2% difference in elevation RMS.
+  **Scored** against 3DEP 2.5 m averaged onto the same 10 m grid (an independent
+  measurement of the same ground, not another resampling of the same numbers):
+  elevation RMS **2.81 m → 0.91 m**, hillshade roughness **0.064 → 0.047**
+  (reference 0.041), short grid period gone. The control that pins the blame on
+  *nearest* rather than on the number of warps: VRT → **nearest** 10 m (one warp)
+  still hatches at roughness 0.060.
+  **Downstream warning:** hillshading differentiates, so the artefact is far
+  louder in shaded relief than in elevations — but it is *in* the elevations.
+  Anything derived from a 10/30/60 m `get_dem` before this date is affected, worst
+  at high derivative order. Measured on 12 basins in the debris-flow study:
+  relief unchanged, slope biased **high by ~1.8° (6%)** but r = 0.997 (a
+  near-constant offset), aspect fractions move ~0.012, and **plan curvature
+  halved with r = 0.79**. Re-derive second-derivative metrics.
+  Tests: `tests/test_dem.py` (16, offline, `py3dep` replaced by a recording double).
 - **`pick` subcommand (2026-06-26) — cross-platform browser bbox picker.**
   `plot.bbox_picker(i15, hillshade=, reference=, perimeters=, gauges=, cmd_prefix=,
   cmd_suffix=)` renders the event's i15 map **through `drape_i15`** so it carries
