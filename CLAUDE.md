@@ -483,6 +483,13 @@ in `README.md`.
   (reference 0.041), short grid period gone. The control that pins the blame on
   *nearest* rather than on the number of warps: VRT → **nearest** 10 m (one warp)
   still hatches at roughness 0.060.
+  **CLI (2026-08-14):** `--resampling` on `dem` / `run` / `zoom --refine-dem`
+  (`nearest|bilinear|cubic|cubic_spline|lanczos|average` — the ones that mean
+  something on a continuous surface; `mode`/`sum`/`q1` are valid rasterio
+  resamplers but nonsense for a DEM, so they are not offered). It defaults to
+  **`None`, not a name**, so `dem.DEFAULT_RESAMPLING` stays the single source
+  of truth — `_resolve_resampling(None)` returns it. `nearest` is deliberately
+  still reachable: reproducing the hatch is the control experiment above.
   **Downstream warning:** hillshading differentiates, so the artefact is far
   louder in shaded relief than in elevations — but it is *in* the elevations.
   Anything derived from a 10/30/60 m `get_dem` before this date is affected, worst

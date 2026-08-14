@@ -90,7 +90,15 @@ def coverage_fraction(aoi, res="1m"):
 
 
 def _resolve_resampling(resampling):
-    """Accept a ``Resampling`` member or its name ('bilinear', 'cubic', ...)."""
+    """Accept a ``Resampling`` member, its name ('bilinear', 'cubic', ...), or
+    ``None`` for :data:`DEFAULT_RESAMPLING`.
+
+    ``None`` matters for callers that pass the option straight through without
+    knowing whether the user set it -- the CLI's ``--resampling`` defaults to
+    ``None`` so the library, not the parser, owns the default.
+    """
+    if resampling is None:
+        return DEFAULT_RESAMPLING
     if isinstance(resampling, Resampling):
         return resampling
     try:

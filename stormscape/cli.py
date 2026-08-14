@@ -91,7 +91,8 @@ def _cmd_dem(args):
     fetch_dem_and_hillshade(_aoi_from_args(args), resolution=args.resolution,
                             dst_crs=args.dst_crs, dem_path=dem_path,
                             hillshade_path=hs_path, pad_deg=args.pad_deg,
-                            clip=args.clip_dem)
+                            clip=args.clip_dem,
+                            resampling=getattr(args, "resampling", None))
     print(f"wrote {dem_path}\nwrote {hs_path}")
     return dem_path, hs_path
 
@@ -482,7 +483,8 @@ def _cmd_zoom(args):
             fetch_dem_and_hillshade(spec, resolution=args.resolution,
                                     dst_crs=args.dst_crs, dem_path=dem_path,
                                     hillshade_path=hs_path, pad_deg=refine_pad,
-                                    clip=args.clip_dem, retries=2)
+                                    clip=args.clip_dem, retries=2,
+                                    resampling=getattr(args, "resampling", None))
             print(f"wrote {dem_path}\nwrote {hs_path}")
             refined = True
         except Exception as ex:                # noqa: BLE001 (3DEP timeout, etc.)
@@ -1545,6 +1547,24 @@ def _add_aoi(p):
     _add_layout(p)
 
 
+def _add_dem_opts(p):
+    """DEM-fetch knobs shared by `dem`, `run` and `zoom --refine-dem`.
+
+    The resampling choices are the ones that make sense on a continuous
+    elevation surface; `mode`/`sum`/`q1` and friends are valid rasterio
+    resamplers but meaningless for a DEM, so they are not offered. `nearest` IS
+    offered despite being the artefact this project went to some trouble to
+    remove -- reproducing the corduroy hatch is the control experiment that
+    pins the blame on nearest rather than on the number of warps.
+    """
+    p.add_argument("--resampling", default=None,
+                   choices=["nearest", "bilinear", "cubic", "cubic_spline",
+                            "lanczos", "average"],
+                   help="resampling for the 3DEP warp (default bilinear; cubic "
+                        "overshoots at cliffs and hillshading turns that into "
+                        "bright rims, nearest aliases into a ~45 deg hatch)")
+
+
 def _add_layout(p):
     """``--flat`` opts out of the sorted figures/rasters/tables/vectors layout.
 
@@ -1646,6 +1666,7 @@ def main(argv=None):
     pd_.add_argument("--resolution", type=int, default=10)
     pd_.add_argument("--clip-dem", action="store_true",
                      help="mask DEM outside the AOI polygon")
+    _add_dem_opts(pd_)
     pd_.set_defaults(func=_cmd_dem)
 
     pi = sub.add_parser("i15", help="stack MRMS into a peak-i15 field")
@@ -1676,6 +1697,7 @@ def main(argv=None):
     pr.add_argument("--resolution", type=int, default=10)
     pr.add_argument("--clip-dem", action="store_true",
                     help="mask DEM outside the AOI polygon")
+    _add_dem_opts(pr)
     pr.add_argument("--qpe-thresh", type=float, default=2.5)
     pr.add_argument("--max-wet-hours", type=int, default=8)
     pr.add_argument("--workers", type=int, default=12)
@@ -1916,6 +1938,7 @@ def main(argv=None):
                     help="DEM resolution for --refine-dem, metres (default 10)")
     pz.add_argument("--clip-dem", action="store_true",
                     help="with --refine-dem, mask the DEM outside the zoom polygon")
+    _add_dem_opts(pz)
     pz.add_argument("--crop-rasters", action="store_true",
                     help="also write cropped copies of the source GeoTIFFs to the "
                          "new folder (a self-contained zoom)")

@@ -180,3 +180,9 @@ def test_hillshade_is_0_255_on_the_dem_grid():
     assert hs.shape == g.shape
     assert hs.rio.resolution() == g.rio.resolution()
     assert float(hs.min()) >= 0.0 and float(hs.max()) <= 255.0
+
+
+def test_resampling_none_resolves_to_the_default():
+    """None means "caller did not choose" -- the CLI passes it straight through
+    so the library, not the parser, owns the default."""
+    assert dem_mod._resolve_resampling(None) is dem_mod.DEFAULT_RESAMPLING

@@ -659,6 +659,15 @@ kept, and 2-min `PrecipRate` is stacked over each contiguous wet run.
   grids on the PFDS GIS server (`hdsc.nws.noaa.gov/pub/hdsc/data/...`); region
   extents bundled in `data/atlas14_regions.csv`.
 
+### DEM resampling
+
+3DEP DEMs are warped with **bilinear** by default. `--resampling` on `dem`,
+`run` and `zoom --refine-dem` overrides it
+(`nearest|bilinear|cubic|cubic_spline|lanczos|average`). Cubic overshoots at
+cliff edges and hillshading turns the overshoot into bright rims; `nearest`
+aliases the 1/3-arc-second VRT into a ~45° hatch and is offered only so that
+artefact stays reproducible.
+
 ## Output layout
 
 Products are sorted by kind inside `--out-dir`:

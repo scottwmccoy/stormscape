@@ -58,6 +58,10 @@ def _opts(cmd):
     # climate / smoothing knobs
     ("climate", "--obs-smooth"), ("zoom", "--obs-smooth"),
     ("smooth", "--gauge-analysis"), ("smooth", "--write"),
+    # DEM warp resampling — on every command that fetches a DEM
+    ("dem", "--resampling"), ("run", "--resampling"), ("zoom", "--resampling"),
+    # product layout
+    ("dem", "--flat"), ("run", "--flat"), ("gauges", "--flat"),
 ])
 def test_documented_flag_is_present(cmd, flag, capsys):
     with pytest.raises(SystemExit):
@@ -126,3 +130,48 @@ def test_labels_normalises_the_off_switches():
     class B:
         basemap_labels = "CartoDB.PositronOnlyLabels"
     assert cli._labels(B()) == "CartoDB.PositronOnlyLabels"
+
+
+# --------------------------------------------------------------------------- #
+# --resampling: it has to REACH the DEM fetch, not merely parse
+# --------------------------------------------------------------------------- #
+def _dem_kwargs(monkeypatch, extra):
+    """Run `dem` with the fetch stubbed; return the kwargs it was called with."""
+    import stormscape.dem as d
+    seen = {}
+
+    def fake(aoi, **kw):
+        seen.update(kw)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(d, "fetch_dem_and_hillshade", fake)
+    with pytest.raises(SystemExit):
+        cli.main(["dem", "--bbox", "-119.6", "39.7", "-119.5", "39.8",
+                  "--out-dir", "/tmp/_ss_test"] + extra)
+    return seen
+
+
+def test_resampling_defaults_to_none_so_the_library_owns_the_default(monkeypatch):
+    """The parser must not pin the default — dem.DEFAULT_RESAMPLING does."""
+    assert _dem_kwargs(monkeypatch, [])["resampling"] is None
+
+
+@pytest.mark.parametrize("name", ["nearest", "bilinear", "cubic", "lanczos"])
+def test_resampling_is_forwarded_to_the_dem_fetch(monkeypatch, name):
+    assert _dem_kwargs(monkeypatch, ["--resampling", name])["resampling"] == name
+
+
+def test_unknown_resampling_is_rejected_by_the_parser(capsys):
+    with pytest.raises(SystemExit) as e:
+        cli.main(["dem", "--bbox", "-119.6", "39.7", "-119.5", "39.8",
+                  "--resampling", "banana"])
+    assert e.value.code != 0
+    assert "invalid choice" in capsys.readouterr().err
+
+
+def test_resampling_offers_nearest_so_the_artefact_stays_reproducible(capsys):
+    """Reproducing the corduroy hatch is the control that pins it on *nearest*
+    rather than on the number of warps — keep it reachable from the CLI."""
+    with pytest.raises(SystemExit):
+        cli.main(["dem", "--help"])
+    assert "nearest" in capsys.readouterr().out
