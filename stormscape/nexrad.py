@@ -63,6 +63,11 @@ RATE_RELATIONS = {
     "marshall_palmer": (200.0, 1.6),
 }
 
+# Volume count above which download_scans() warns that the window looks like a
+# whole storm day rather than a storm. Level II is ~10 volumes/hour, so this is
+# roughly "more than half a day of scans".
+BULK_SCAN_WARN = 120
+
 
 # --------------------------------------------------------------------------- #
 # NEXRAD site table  (data/nexrad_sites.csv, from NCEI HOMR)
@@ -169,6 +174,17 @@ def download_scans(scans: Sequence, cache_dir: str = "nexrad_cache") -> List[str
     for s in scans:
         p = os.path.join(cache_dir, s.filename)
         (have if os.path.exists(p) else todo).append(p if os.path.exists(p) else s)
+    if len(todo) > BULK_SCAN_WARN:
+        # Level II runs ~10 volumes/hour at ~10 MB each, so a storm-DAY window is
+        # ~2 GB and tens of minutes of Py-ART time -- nearly all of it dry. Bound
+        # the window first with stormscape.mrms.wet_window (hourly QPE, a few KB
+        # per hour) or gauges.storm_window. Warn rather than refuse: some callers
+        # legitimately want a long span.
+        warnings.warn(
+            f"downloading {len(todo)} NEXRAD volumes (~{len(todo) * 10 / 1024:.1f} GB); "
+            "if this is a whole storm day, bound the window with "
+            "stormscape.mrms.wet_window() first -- the CLI does this automatically",
+            stacklevel=2)
     if todo:
         res = _conn().download(todo, cache_dir)
         have.extend(lf.filepath for lf in res.iter_success())

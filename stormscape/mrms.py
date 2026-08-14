@@ -196,6 +196,42 @@ def contiguous_runs(hour_list):
     return runs
 
 
+def wet_window(aoi, start, end, pad_deg=0.05, qpe_thresh=QPE_THRESH,
+               pad_min=30, workers=WORKERS):
+    """Tight ``(start, end)`` spanning the wet hours in ``[start, end]``; ``None``
+    if the whole span is dry.
+
+    The radar-side counterpart of :func:`stormscape.gauges.storm_window`, for
+    bounding an expensive fetch *before* making it. One hourly ``RadarOnly`` QPE
+    grid per hour over the AOI window is a few KB, so probing a 30-hour span
+    costs far less than a single NEXRAD Level II volume -- which is the point: a
+    storm-DAY window handed straight to
+    :func:`stormscape.nexrad.virtual_gauge_timeseries` pulls ~10 volumes an hour
+    for the whole day, nearly all of them dry.
+
+    Spans the first to the last wet hour (plus ``pad_min``), so a day with two
+    separate cells returns one window covering both rather than dropping the gap
+    between them.
+    """
+    bounds, _ = load_aoi(aoi, pad_deg=pad_deg)
+    win, _ = aoi_window(bounds)
+    hours, t = [], start.replace(minute=0, second=0, microsecond=0)
+    while t <= end:
+        hours.append(t)
+        t += dt.timedelta(hours=1)
+    arrs = fetch_many("RadarOnly", hours, win, workers=workers)
+    wet = [h for h in hours
+           if h in arrs and np.isfinite(arrs[h]).any()
+           and float(np.nanmax(arrs[h])) > qpe_thresh]
+    if not wet:
+        return None
+    pad = dt.timedelta(minutes=int(pad_min))
+    # the hourly QPE stamped at HH covers the hour ENDING at HH, so the wet
+    # period itself starts an hour before the first wet stamp
+    return (max(min(wet) - dt.timedelta(hours=1) - pad, start),
+            min(max(wet) + pad, end))
+
+
 def i15_storm_day(aoi, date, pad_deg=0.05, qpe_thresh=QPE_THRESH,
                   max_wet_hours=MAX_WET_HRS, scan_pad_h=SCAN_PAD_H,
                   workers=WORKERS, verbose=True):

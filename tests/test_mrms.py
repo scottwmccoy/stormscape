@@ -125,3 +125,60 @@ def test_aoi_window_clamps_at_the_northern_edge():
     win, _ = mrms.aoi_window((-119.7, mrms.G_N - 1.0, -119.4, mrms.G_N + 1.0))
     assert win.row_off == 0
     assert win.height > 0
+
+
+# --------------------------------------------------------------------------- #
+# wet_window — the cheap radar probe that bounds an expensive NEXRAD fetch
+# --------------------------------------------------------------------------- #
+def _wet_window_over(monkeypatch, wet_hours, start, end, **kw):
+    """Run wet_window with fetch_many faked: `wet_hours` return a rainy grid."""
+    monkeypatch.setattr(mrms, "load_aoi", lambda *a, **k: ((-119.8, 39.4, -119.5, 39.7), None))
+    def fake_fetch_many(product, times, win, workers=None):
+        return {t: (np.full((2, 2), 20.0) if t in wet_hours else np.zeros((2, 2)))
+                for t in times}
+    monkeypatch.setattr(mrms, "fetch_many", fake_fetch_many)
+    return mrms.wet_window("aoi", start, end, **kw)
+
+
+def test_wet_window_brackets_only_the_wet_hours(monkeypatch):
+    """A 30 h storm-DAY window holding a 3 h storm must come back ~hours, not ~days."""
+    start, end = dt.datetime(2026, 8, 12, 4), dt.datetime(2026, 8, 13, 10)
+    wet = [dt.datetime(2026, 8, 12, h) for h in (21, 22, 23)]
+    got = _wet_window_over(monkeypatch, wet, start, end, pad_min=30)
+    assert got is not None
+    lo, hi = got
+    # hourly QPE at HH covers the hour ENDING at HH, so the window opens before 21Z
+    assert lo == dt.datetime(2026, 8, 12, 19, 30)
+    assert hi == dt.datetime(2026, 8, 12, 23, 30)
+    assert (hi - lo).total_seconds() / 3600 < 5           # not the full 30 h
+
+
+def test_wet_window_is_none_when_every_hour_is_dry(monkeypatch):
+    start, end = dt.datetime(2026, 8, 12, 4), dt.datetime(2026, 8, 13, 10)
+    assert _wet_window_over(monkeypatch, [], start, end) is None
+
+
+def test_wet_window_spans_two_separate_cells(monkeypatch):
+    """Two cells split by a dry gap yield ONE window covering both, not the first."""
+    start, end = dt.datetime(2026, 8, 13, 4), dt.datetime(2026, 8, 14, 10)
+    wet = [dt.datetime(2026, 8, 13, 20), dt.datetime(2026, 8, 14, 2)]
+    lo, hi = _wet_window_over(monkeypatch, wet, start, end, pad_min=0)
+    assert lo == dt.datetime(2026, 8, 13, 19)
+    assert hi == dt.datetime(2026, 8, 14, 2)
+
+
+def test_wet_window_never_escapes_the_requested_span(monkeypatch):
+    """Padding must clamp to [start, end] so the caller's bounds are respected."""
+    start, end = dt.datetime(2026, 8, 12, 20), dt.datetime(2026, 8, 12, 23)
+    wet = [dt.datetime(2026, 8, 12, h) for h in (20, 21, 22, 23)]
+    lo, hi = _wet_window_over(monkeypatch, wet, start, end, pad_min=600)
+    assert lo == start and hi == end
+
+
+def test_wet_window_honours_the_qpe_threshold(monkeypatch):
+    """An hour at/below qpe_thresh is dry — the threshold is what keeps drizzle
+    from stretching the window back to a full day."""
+    start, end = dt.datetime(2026, 8, 12, 4), dt.datetime(2026, 8, 12, 8)
+    wet = [dt.datetime(2026, 8, 12, 6)]
+    assert _wet_window_over(monkeypatch, wet, start, end, qpe_thresh=50.0) is None
+    assert _wet_window_over(monkeypatch, wet, start, end, qpe_thresh=5.0) is not None

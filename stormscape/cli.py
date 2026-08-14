@@ -220,6 +220,63 @@ def _gauge_window(args):
     return start, end
 
 
+def _explicit_window(args):
+    """True when the user pinned the window with --start/--end (never narrow it)."""
+    return bool(getattr(args, "start", None) and getattr(args, "end", None))
+
+
+def _narrow_to_storm(args, start, end, series=None, reason="NEXRAD"):
+    """Shrink a storm-DAY window to the storm's wet period *before* an expensive
+    fetch, using only cheap products.
+
+    A ``--date`` window spans ~30 h (:data:`stormscape.mrms.SCAN_PAD_H`) so the
+    local day is fully covered, but a NEXRAD Level II fetch over that window
+    pulls ~300 volumes / ~2 GB when the storm itself lasted a few hours. Order of
+    preference:
+
+    1. an explicit ``--start``/``--end`` -- the user's window always wins;
+    2. the gauge series' mass-weighted :func:`stormscape.gauges.storm_window`;
+    3. the radar-side :func:`stormscape.mrms.wet_window` (hourly QPE, a few KB
+       per hour) -- which also covers the no-gauge and dry-gauge cases, where
+       (2) returns ``None`` yet the radar clearly saw rain.
+
+    Falls back to the original window if everything reads dry, so a genuinely
+    unknown storm is never silently truncated to nothing.
+    """
+    if _explicit_window(args):
+        return start, end
+    span_h = (end - start).total_seconds() / 3600.0
+    wins = []
+    if series:
+        from .gauges import storm_window
+        win = storm_window(series, pad_min=getattr(args, "pad_min", 30))
+        if win:
+            wins.append(("gauge rain mass", win))
+    try:
+        from .mrms import wet_window
+        win = wet_window(_aoi_from_args(args), start, end,
+                         pad_deg=getattr(args, "pad_deg", 0.05),
+                         pad_min=getattr(args, "pad_min", 30))
+        if win:
+            wins.append(("MRMS hourly QPE", win))
+    except Exception as e:                                     # noqa: BLE001
+        print(f"  note: MRMS wet-window probe failed ({repr(e)[:60]})")
+    if not wins:
+        print(f"  note: no wet period found in the {span_h:.0f} h window; keeping it whole")
+        return start, end
+    # UNION, not first-match. Gauges are point samples: on 2026-08-13 a single
+    # wet gauge put the rain mass in 19:01-20:29 while MRMS saw the AOI wet
+    # 19-04Z, and trusting the gauge window alone would have cut the storm's
+    # peak and its second cell out of the comparison entirely. The radar bounds
+    # when it rained *anywhere in the AOI*; the gauges can only extend that.
+    lo = min(w[0] for _, w in wins)
+    hi = max(w[1] for _, w in wins)
+    src = " + ".join(n for n, _ in wins)
+    print(f"  {reason} window from {src}: {lo:%m-%d %H:%M}-{hi:%m-%d %H:%M} "
+          f"({(hi - lo).total_seconds()/3600:.1f} h of {span_h:.0f} h)")
+    return lo, hi
+
+
 def _fetch_gauges(args):
     from .gauges import SynopticError, gauge_fields
     start, end = _gauge_window(args)
@@ -242,7 +299,7 @@ def _cmd_gauges(args):
     detail figures share one filtered (wet) station set, so their gauges are uniform.
     ``--store-only`` reverts to just the store."""
     import pandas as pd
-    from .gauges import SynopticError, fetch_gauge_event, storm_window
+    from .gauges import SynopticError, fetch_gauge_event
     os.makedirs(args.out_dir, exist_ok=True)
     key = args.key or "gauges"
     start, end = _gauge_window(args)
@@ -269,12 +326,12 @@ def _cmd_gauges(args):
     # stations; that one station set feeds both the atlas and the detail figures.
     if getattr(args, "store_only", False) or not series:
         return out
-    win = storm_window(series, pad_min=args.pad_min)
-    if win:
-        vstart, vend = win
-    else:                                       # no rain mass -> keep the full span
-        vstart = min(d.index.min() for d in series.values())
-        vend = max(d.index.max() for d in series.values())
+    # Bound the products to the storm. Uses gauge rain mass UNIONed with the MRMS
+    # wet window -- a sparse or unlucky gauge set can otherwise put the window on
+    # a fraction of a storm the radar saw across the whole AOI.
+    vstart = min(d.index.min() for d in series.values())
+    vend = max(d.index.max() for d in series.values())
+    vstart, vend = _narrow_to_storm(args, vstart, vend, series=series)
     real = {}
     for n, df in series.items():                # full storm-day -> rain window
         d = df.loc[vstart:vend]
@@ -755,17 +812,20 @@ def _cmd_vgauge(args):
                     if args.from_dir and args.from_key else None)
         if store_gj and os.path.exists(store_gj) and not args.refetch:
             import geopandas as gpd
-            from .gauges import load_event_series, storm_window
+            from .gauges import load_event_series
             gj = gpd.read_file(store_gj)
             real = load_event_series(os.path.join(args.from_dir, "RainGaugeData"),
                                      args.from_key, gj)
-            if start is None:                       # full day -> storm rain window
-                win = storm_window(real, pad_min=args.pad_min)
-                if win:
-                    start, end = win
-                elif real:                          # no rain -> keep the full span
+            # Narrow the storm DAY to the storm itself. `start` is already set
+            # when --date was given, so gating this on `start is None` (as it
+            # once was) silently skipped the trim for every --date run and handed
+            # the full ~30 h to the NEXRAD fetch. Only an explicit --start/--end
+            # should survive untouched.
+            if start is None or not _explicit_window(args):
+                if start is None and real:
                     start = min(d.index.min() for d in real.values())
                     end = max(d.index.max() for d in real.values())
+                start, end = _narrow_to_storm(args, start, end, series=real)
             clipped = {}
             for n, df in real.items():              # trim to the rain window
                 d = df.loc[start:end]
@@ -788,6 +848,10 @@ def _cmd_vgauge(args):
         sys.exit("error: provide --point / --points-file and/or --gauges")
     if start is None:                               # explicit points w/o a window
         start, end = _gauge_window(args)
+        # explicit --point runs have no gauge series to derive a window from, so
+        # probe the radar before a NEXRAD fetch rather than pulling the whole day
+        if getattr(args, "nexrad", False) or args.source == "nexrad":
+            start, end = _narrow_to_storm(args, start, end)
 
     # atlas with --atlas or the all-stations --gauges mode; detail with --detail
     _virtual_gauge_products(

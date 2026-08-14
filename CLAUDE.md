@@ -804,6 +804,27 @@ in `README.md`.
   validated:** clip → 1495 flowlines (206 named / 1289 unnamed), 100% within the AOI
   polygon; bbox → 1801 (whole flowlines). Deliverable `HiddenValley_streams.geojson`
   (3.5 MB) in the Box RD.
+- **Wet-window pre-flight before NEXRAD (2026-08-14) — `mrms.wet_window()`.**
+  A `--date` window spans ~30 h (`SCAN_PAD_H`) so the local day is covered, but
+  handing that to the NEXRAD Level II fetch pulls **~300 volumes / ~2 GB**, of
+  which a few hours are wet. `mrms.wet_window(aoi, start, end)` is the radar-side
+  counterpart of `gauges.storm_window()`: it scans hourly `RadarOnly` QPE (a few
+  KB per hour — cheaper than one Level II volume) and returns the tight
+  `(start, end)` spanning the wet hours, `None` if dry. It spans **first→last**
+  wet hour so a day with two cells returns one window covering both, and it
+  opens an hour before the first wet stamp because hourly QPE at `HH` covers the
+  hour *ending* at `HH`. Bug/Stallion 20260813: **30 h → 10 h**.
+  **The bug it fixes:** `_cmd_vgauge` narrowed to the storm only `if start is
+  None`, but `--date` sets `start` — so *every* `vgauge --date` run skipped the
+  trim and fetched the whole day. `_cmd_gauges` narrowed correctly via
+  `storm_window` but fell back to the **full span** when the gauges read dry,
+  which is the same trap whenever gauges miss a cell the radar saw. Both now go
+  through `cli._narrow_to_storm()`: explicit `--start`/`--end` always wins, then
+  gauge rain-mass, then MRMS hourly QPE, then (only if all dry) the original
+  window — never silently truncated to nothing. `nexrad.download_scans()` also
+  warns above `BULK_SCAN_WARN` (120 volumes) so library callers see the cost
+  coming. Tests in `tests/test_mrms.py` (bracketing, dry→None, two-cell span,
+  clamping to the requested span, threshold).
 - **Testing (`tests/`, pytest, added 2026-07-29) — run it before every push.**
   `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **232 tests,
   ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14 request, no
