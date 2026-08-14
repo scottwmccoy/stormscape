@@ -46,6 +46,7 @@ import requests
 from rasterio.windows import Window
 
 from .aoi import load_aoi
+from .layout import out_path
 
 warnings.filterwarnings("ignore")
 
@@ -377,7 +378,7 @@ def multisensor_total(aoi, date, pad_deg=0.05, scan_pad_h=SCAN_PAD_H,
                 profile=profile, meta=meta)
 
 
-def save_fields(result, out_dir, key, which=None):
+def save_fields(result, out_dir, key, which=None, layout=None):
     """Write the storm-day fields to ``out_dir/<key>_<field>.tif``.
 
     ``which`` optionally restricts the fields written (default: all).
@@ -389,7 +390,7 @@ def save_fields(result, out_dir, key, which=None):
     for label, arr in result["fields"].items():
         if which and label not in which:
             continue
-        path = os.path.join(out_dir, f"{key}_{label}.tif")
+        path = out_path(out_dir, f"{key}_{label}.tif", layout=layout)
         with rasterio.open(path, "w", **profile) as d:
             d.write(arr.astype("float32"), 1)
         paths.append(path)

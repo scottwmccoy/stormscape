@@ -32,6 +32,7 @@ import pandas as pd
 import requests
 
 from .aoi import load_aoi
+from .layout import out_path
 
 warnings.filterwarnings("ignore")
 
@@ -424,7 +425,8 @@ def fetch_gauge_event(aoi, starttime, endtime, out_dir: str, key: str,
                       durations: Sequence[int] = DEFAULT_DURATIONS,
                       series_durations: Sequence[int] = (5, 15, 30, 60),
                       status: Optional[str] = "ACTIVE", batch: int = 50,
-                      pad_deg: float = 0.05, write_series: bool = True
+                      pad_deg: float = 0.05, write_series: bool = True,
+                      layout=None
                       ) -> Tuple[gpd.GeoDataFrame, Dict[str, "pd.DataFrame"]]:
     """**One** Synoptic fetch -> the canonical gauge store for an event.
 
@@ -474,7 +476,7 @@ def fetch_gauge_event(aoi, starttime, endtime, out_dir: str, key: str,
 
     gdf = stations.join(pd.DataFrame(metrics, index=stations.index))
     os.makedirs(out_dir, exist_ok=True)
-    gpath = os.path.join(out_dir, f"{key}_gauges.geojson")
+    gpath = out_path(out_dir, f"{key}_gauges.geojson", layout=layout)
     gdf.to_file(gpath, driver="GeoJSON")
     if write_series:
         rgd = os.path.join(out_dir, "RainGaugeData")

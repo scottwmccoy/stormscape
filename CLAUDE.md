@@ -825,6 +825,30 @@ in `README.md`.
   warns above `BULK_SCAN_WARN` (120 volumes) so library callers see the cost
   coming. Tests in `tests/test_mrms.py` (bracketing, dry→None, two-cell span,
   clamping to the requested span, threshold).
+- **Sorted output layout is the default (2026-08-14) — `stormscape/layout.py`.**
+  A finished event is a few dozen files of four kinds, and one flat directory
+  buries the figures. Products now sort into `figures/` (+ nested
+  `figures/VirtualGaugeFigures/`), `rasters/`, `tables/`, `vectors/`;
+  `RainGaugeData/` and the `nexrad_cache/` / `atlas14_cache/` stay at the event
+  root (stores and inputs, not products — and the NEXRAD cache should stay
+  obvious to delete). Writers go through `layout.out_path()` / `layout.subdir()`,
+  readers through `layout.find()` / `layout.find_subdir()`.
+  **Backward compatibility is the whole trick:** `find()` checks the sorted
+  subdirectory then falls back to the flat path, so every pre-existing event
+  folder keeps working through `--from-dir` / `--radar-dir` with **no
+  migration** — verified by running `compare` against the same event laid out
+  both ways and diffing the CSV (byte-identical). When a file is absent `find()`
+  returns the *sorted* path so the error names where a fresh run would put it.
+  Opt out with **`--flat`** on any writing subcommand, `layout="flat"` in the
+  library, or `$STORMSCAPE_LAYOUT=flat`; `main()` exports the env var once
+  rather than threading `layout=` through ~40 call sites, so `--flat` reaches
+  library calls (`mrms.save_fields`, `gauges.fetch_gauge_event`) unchanged.
+  `README.md` is pinned to the event root (it describes the folder; filing it
+  under `tables/` with the CSVs buries it). Unmapped extensions (`.html` from
+  `pick`) stay at the root. Tests in `tests/test_layout.py` (25) cover sorting,
+  both read layouts, precedence, the env var, and a write→find round trip;
+  `tests/test_export.py` now asserts on `export_geotiffs`' **returned** paths
+  rather than hand-built ones.
 - **Testing (`tests/`, pytest, added 2026-07-29) — run it before every push.**
   `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **232 tests,
   ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14 request, no

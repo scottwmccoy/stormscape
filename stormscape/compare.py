@@ -21,6 +21,8 @@ from typing import Dict, Optional
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+
+from .layout import find
 import rasterio
 
 # gauge metric column -> radar field (GeoTIFF stem ``<key>_<field>.tif``)
@@ -164,14 +166,14 @@ def compare_storm(gauges: gpd.GeoDataFrame, out_dir: str, key: str,
     """
     rasters = {}
     for rfield in set(pairs.values()):
-        p = os.path.join(out_dir, f"{key}_{rfield}.tif")
+        p = find(out_dir, f"{key}_{rfield}.tif")
         if os.path.exists(p):
             rasters[rfield] = p
-    rqi_p = os.path.join(out_dir, f"{key}_rqi.tif")
+    rqi_p = find(out_dir, f"{key}_rqi.tif")
     rqi_path = rqi_p if os.path.exists(rqi_p) else None
     table = radar_vs_gauge(gauges, rasters, pairs=pairs, rqi_path=rqi_path,
                            rqi_min=rqi_min)
-    ms_path = os.path.join(out_dir, f"{key}_mstotal.tif")
+    ms_path = find(out_dir, f"{key}_mstotal.tif")
     if multisensor and os.path.exists(ms_path) and "total_mm" in table.columns:
         table["radar_mstotal"] = sample_raster_at_points(table, ms_path)
         table["resid_mstotal"] = table["radar_mstotal"] - pd.to_numeric(

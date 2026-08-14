@@ -28,6 +28,7 @@ import os
 import sys
 
 from .export import DEFAULT_EXPORT_FIELDS
+from .layout import find, find_subdir, out_path, subdir
 
 
 def _aoi_from_args(args):
@@ -48,7 +49,7 @@ def _find_event_aoi(from_dir, from_key):
     names = [f"{from_key}_aoi.geojson"] + [
         f"{from_key}_AOI.{e}" for e in ("kmz", "geojson", "gpkg", "shp")]
     for n in names:
-        p = os.path.join(from_dir, n)
+        p = find(from_dir, n)
         if os.path.exists(p):
             return p
     return None
@@ -65,7 +66,7 @@ def _save_event_aoi(args, out_dir, key):
         from .aoi import bbox_polygon, load_aoi
         bounds, geom = load_aoi(_aoi_from_args(args))
         g = gpd.GeoDataFrame(geometry=[geom or bbox_polygon(bounds)], crs=4326)
-        path = os.path.join(out_dir, f"{key}_aoi.geojson")
+        path = out_path(out_dir, f"{key}_aoi.geojson")
         g.to_file(path, driver="GeoJSON")
         return path
     except Exception as e:                           # noqa: BLE001 (best-effort)
@@ -85,8 +86,8 @@ def _cmd_dem(args):
     from .dem import fetch_dem_and_hillshade
     os.makedirs(args.out_dir, exist_ok=True)
     key = args.key or "aoi"
-    dem_path = os.path.join(args.out_dir, f"{key}_dem.tif")
-    hs_path = os.path.join(args.out_dir, f"{key}_hillshade.tif")
+    dem_path = out_path(args.out_dir, f"{key}_dem.tif")
+    hs_path = out_path(args.out_dir, f"{key}_hillshade.tif")
     fetch_dem_and_hillshade(_aoi_from_args(args), resolution=args.resolution,
                             dst_crs=args.dst_crs, dem_path=dem_path,
                             hillshade_path=hs_path, pad_deg=args.pad_deg,
@@ -113,7 +114,7 @@ def _cmd_i15(args):
                                pad_deg=args.pad_deg, workers=args.workers)
         for p in save_fields(ms, args.out_dir, key):
             print(f"wrote {p}")
-    return os.path.join(args.out_dir, f"{key}_i15max.tif")
+    return out_path(args.out_dir, f"{key}_i15max.tif")
 
 
 def _cmd_map(args):
@@ -143,7 +144,7 @@ def _cmd_run(args):
     from .plot import drape_i15
     key = args.key or "run"
     _save_event_aoi(args, args.out_dir, key)        # for climate auto-extent-match
-    out = os.path.join(args.out_dir, f"{key}.png")
+    out = out_path(args.out_dir, f"{key}.png")
     title = args.title or f"{key}  -  i15 over terrain  ({args.date})"
     clip = (args.perimeters or args.aoi) if args.clip else None
 
@@ -154,7 +155,7 @@ def _cmd_run(args):
     if args.gauges or args.compare:
         g, start, end = _fetch_gauges(args)
         if len(g):
-            gpath = os.path.join(args.out_dir, f"{key}_gauges.geojson")
+            gpath = out_path(args.out_dir, f"{key}_gauges.geojson")
             g.to_file(gpath, driver="GeoJSON")
             print(f"wrote {gpath}  ({len(g)} gauges)")
             gauges_gdf = g
@@ -184,11 +185,11 @@ def _cmd_run(args):
                                      rqi_min=args.rqi_min,
                                      max_report_min=args.max_report_min,
                                      multisensor=args.multisensor)
-        csv = os.path.join(args.out_dir, f"{key}_compare.csv")
+        csv = out_path(args.out_dir, f"{key}_compare.csv")
         table.drop(columns="geometry").to_csv(csv, index=False)
         print(stats.to_string(index=False))
         print(f"wrote {csv}")
-        cmp_png = os.path.join(args.out_dir, f"{key}_compare.png")
+        cmp_png = out_path(args.out_dir, f"{key}_compare.png")
         drape_i15(hs_path, i15_path, out_path=cmp_png, work_crs="UTM",
                   cmap=args.cmap, wet_min=args.wet_min,
                   perimeters=args.perimeters,
@@ -310,7 +311,7 @@ def _cmd_gauges(args):
             pad_deg=args.pad_deg, write_series=not args.no_series)
     except SynopticError as e:
         sys.exit(f"Synoptic error: {e}")
-    out = os.path.join(args.out_dir, f"{key}_gauges.geojson")
+    out = out_path(args.out_dir, f"{key}_gauges.geojson")
     if not len(g):
         print(f"no gauges found in AOI for {start} to {end}")
         return out
@@ -373,7 +374,7 @@ def _cmd_compare(args):
     print(f"wrote {out_csv}")
     if args.map:
         from .plot import drape_i15
-        i15_tif = os.path.join(radar_dir, f"{key}_i15max.tif")
+        i15_tif = find(radar_dir, f"{key}_i15max.tif")
         drape_i15(args.hillshade, i15_tif, out_path=args.map,
                   work_crs="UTM", cmap=args.cmap, gauges=table,
                   gauge_value=f"resid_{args.map_metric}",
@@ -428,7 +429,7 @@ def _crop_rasters(src_dir, src_key, out_dir, key, bounds, pad_deg, skip=()):
             except Exception as ex:                # zoom box outside raster, etc.
                 print(f"note: could not crop {f}: {ex}")
                 continue
-        cropped.rio.to_raster(os.path.join(out_dir, f"{key}_{f}.tif"))
+        cropped.rio.to_raster(out_path(out_dir, f"{key}_{f}.tif"))
         wrote += 1
     print(f"cropped {wrote} rasters -> {out_dir}")
 
@@ -466,11 +467,11 @@ def _cmd_zoom(args):
     # 3DEP 1 m WMS can be slow/flaky, so retry; if it still fails, fall back to
     # the existing hillshade so the zoom still renders (just at coarser terrain).
     refined = False
-    src_hs = os.path.join(src, f"{args.from_key}_hillshade.tif")
+    src_hs = find(src, f"{args.from_key}_hillshade.tif")
     if args.refine_dem:
         from .dem import fetch_dem_and_hillshade
-        dem_path = os.path.join(args.out_dir, f"{key}_dem.tif")
-        hs_path = os.path.join(args.out_dir, f"{key}_hillshade.tif")
+        dem_path = out_path(args.out_dir, f"{key}_dem.tif")
+        hs_path = out_path(args.out_dir, f"{key}_hillshade.tif")
         # cap the DEM pad small: the view is clipped to the box, so the hillshade
         # only needs a sliver of edge padding -- and at 1 m the default ~0.05 deg
         # (~5.5 km) pad would ~5x the area and blow past the WMS 120 s timeout.
@@ -499,7 +500,7 @@ def _cmd_zoom(args):
                       args.pad_deg,
                       skip=("dem", "hillshade") if refined else ())
 
-    gpath = os.path.join(src, f"{args.from_key}_gauges.geojson")
+    gpath = find(src, f"{args.from_key}_gauges.geojson")
     have_gauges = args.gauges and os.path.exists(gpath)
     if args.gauges and not have_gauges:
         print(f"note: {gpath} not found; skipping gauge overlay")
@@ -513,11 +514,11 @@ def _cmd_zoom(args):
                     else _prepare_hillshade(hs_path, "UTM", _render_px(args.dpi)))
 
     if not args.no_map:
-        i15_tif = os.path.join(src, f"{args.from_key}_i15max.tif")
+        i15_tif = find(src, f"{args.from_key}_i15max.tif")
         if not os.path.exists(i15_tif):
             sys.exit(f"error: {i15_tif} not found (need the source i15max field)")
         gauges_gdf = gpd.read_file(gpath) if have_gauges else None
-        out = os.path.join(args.out_dir, f"{key}.png")
+        out = out_path(args.out_dir, f"{key}.png")
         drape_i15(hs_da, i15_tif, out_path=out, work_crs=hs_wc,
                   cmap=args.cmap, wet_min=args.wet_min,
                   perimeters=args.perimeters, basins=args.basins,
@@ -538,7 +539,7 @@ def _cmd_zoom(args):
         print(f"wrote {out}")
 
     if not args.no_panels:
-        out = os.path.join(args.out_dir, f"{key}_panels.png")
+        out = out_path(args.out_dir, f"{key}_panels.png")
         diagnostic_panels(src, args.from_key, which=args.fields, out_path=out,
                           hillshade=hs_da, work_crs=hs_wc,
                           perimeters=args.perimeters,
@@ -572,20 +573,20 @@ def _cmd_pick(args):
     based so it works on Windows / macOS / Linux with no GUI-toolkit dependency."""
     from .plot import bbox_picker
     src = args.from_dir
-    i15 = args.i15 or os.path.join(src, f"{args.from_key}_i15max.tif")
+    i15 = args.i15 or find(src, f"{args.from_key}_i15max.tif")
     if not os.path.exists(i15):
         sys.exit(f"error: {i15} not found (need the source i15max field)")
-    hs = args.hillshade or os.path.join(src, f"{args.from_key}_hillshade.tif")
+    hs = args.hillshade or find(src, f"{args.from_key}_hillshade.tif")
     hs = hs if os.path.exists(hs) else None
     gauges = None
     if args.gauges:
         import geopandas as gpd
-        gp = os.path.join(src, f"{args.from_key}_gauges.geojson")
+        gp = find(src, f"{args.from_key}_gauges.geojson")
         if os.path.exists(gp):
             gauges = gpd.read_file(gp)
         else:
             print(f"note: {gp} not found; skipping gauge overlay")
-    out = args.out or os.path.join(src, f"{args.from_key}_pick.html")
+    out = args.out or find(src, f"{args.from_key}_pick.html")
     zoom_dir = os.path.join(src, f"{args.from_key}_zoom")
     prefix = (f'python -m stormscape zoom --from-dir "{src}" '
               f'--from-key {args.from_key}')
@@ -643,7 +644,7 @@ def _vgauge_aoi_bounds(args):
         return load_aoi(_aoi_from_args(args))[0]
     from_dir, from_key = getattr(args, "from_dir", None), getattr(args, "from_key", None)
     if from_dir and from_key:
-        tif = os.path.join(from_dir, f"{from_key}_i15max.tif")
+        tif = find(from_dir, f"{from_key}_i15max.tif")
         if os.path.exists(tif):
             import rioxarray
             with rioxarray.open_rasterio(tif) as d:
@@ -713,7 +714,7 @@ def _virtual_gauge_products(args, *, points, real, reusing, user_points,
     wet-gauge content is identical by construction."""
     from .plot import (plot_virtual_gauge, virtual_gauge_atlas,
                        virtual_gauge_detail)
-    rgd = os.path.join(args.out_dir, "RainGaugeData")
+    rgd = subdir(args.out_dir, "RainGaugeData")
     os.makedirs(rgd, exist_ok=True)
     # virtual-gauge series from one or more radar sources (MRMS and/or NEXRAD;
     # --nexrad adds NEXRAD alongside MRMS in the post-2020 both-available epoch)
@@ -757,14 +758,14 @@ def _virtual_gauge_products(args, *, points, real, reusing, user_points,
     primary = sources.get("MRMS") or next(iter(sources.values()), {})
     for name, _, _ in user_points:
         if name in primary:
-            png = os.path.join(args.out_dir, f"{key}_{stems[name]}.png")
+            png = out_path(args.out_dir, f"{key}_{stems[name]}.png")
             plot_virtual_gauge(primary[name], name=name, out_path=png,
                                durations=tuple(args.durations), dpi=args.dpi)
             print(f"wrote {png}")
 
     # atlas: every radar source + real overlay where matched
     if make_atlas:
-        atlas = os.path.join(args.out_dir, f"{key}_vg_atlas.png")
+        atlas = out_path(args.out_dir, f"{key}_vg_atlas.png")
         virtual_gauge_atlas(sources, real_series=real,
                             value=f"i{args.atlas_metric}_mmph",
                             out_path=atlas, dpi=args.dpi)
@@ -774,7 +775,7 @@ def _virtual_gauge_products(args, *, points, real, reusing, user_points,
     # line styles as the atlas, into VirtualGaugeFigures/ -- SAME gauge set as the
     # atlas (uniform wet gauges across both products)
     if make_detail:
-        fdir = os.path.join(args.out_dir, "VirtualGaugeFigures")
+        fdir = subdir(args.out_dir, "VirtualGaugeFigures")
         os.makedirs(fdir, exist_ok=True)
         names = []
         for s in (*sources.values(), real):
@@ -808,13 +809,13 @@ def _cmd_vgauge(args):
     # --from-dir is given, trimming to the storm's rain window; else fetch live.
     real, reusing = {}, False
     if args.gauges:
-        store_gj = (os.path.join(args.from_dir, f"{args.from_key}_gauges.geojson")
+        store_gj = (find(args.from_dir, f"{args.from_key}_gauges.geojson")
                     if args.from_dir and args.from_key else None)
         if store_gj and os.path.exists(store_gj) and not args.refetch:
             import geopandas as gpd
             from .gauges import load_event_series
             gj = gpd.read_file(store_gj)
-            real = load_event_series(os.path.join(args.from_dir, "RainGaugeData"),
+            real = load_event_series(find_subdir(args.from_dir, "RainGaugeData"),
                                      args.from_key, gj)
             # Narrow the storm DAY to the storm itself. `start` is already set
             # when --date was given, so gating this on `start is None` (as it
@@ -903,7 +904,7 @@ def _cmd_nexrad(args):
                               rate_cap=args.rate_cap,
                               blockage_dem=args.blockage_dem, cbb_max=args.cbb_max)
         paths = save_fields(res, args.out_dir, key)
-        field_tif = os.path.join(args.out_dir, f"{key}_i15max.tif")
+        field_tif = out_path(args.out_dir, f"{key}_i15max.tif")
         cbar = "peak 15-min intensity  i15  (mm h$^{-1}$)"
         deftitle = f"{radar}  L2 i15 [{args.method}]  ({start:%Y-%m-%d})"
     elif args.composite:                     # storm-peak reflectivity field
@@ -942,7 +943,7 @@ def _cmd_nexrad(args):
         gauges_gdf["radar_val"] = sample_raster_at_points(gauges_gdf, field_tif)
         gv = "radar_val"
 
-    out_png = os.path.join(args.out_dir, f"{key}_nexrad.png")
+    out_png = out_path(args.out_dir, f"{key}_nexrad.png")
     drape_i15(args.hillshade, field_tif, out_path=out_png, work_crs="UTM",
               cmap=args.cmap, wet_min=args.wet_min, cbar_label=cbar,
               perimeters=args.perimeters, reference=args.reference,
@@ -999,7 +1000,7 @@ def _run_climate(args, *, src, from_key, out_dir, key, bounds, clip_gdf,
 
     # 2) observed-vs-climatology comparison figure
     if not args.no_comparison:
-        out = os.path.join(out_dir, f"{key}_climate_compare.png")
+        out = out_path(out_dir, f"{key}_climate_compare.png")
         climatology_comparison(
             out_dir, src, key, durations=durations, obs_key=from_key,
             hillshade=hillshade, work_crs=work_crs,
@@ -1016,8 +1017,8 @@ def _run_climate(args, *, src, from_key, out_dir, key, bounds, clip_gdf,
     # 3) per-duration anomaly maps (observed / climatology)
     if not args.no_anomaly:
         for d in durations:
-            clim_tif = os.path.join(out_dir, f"{key}_clim_i{d}.tif")
-            obs_tif = os.path.join(src, f"{from_key}_i{d}max.tif")
+            clim_tif = out_path(out_dir, f"{key}_clim_i{d}.tif")
+            obs_tif = find(src, f"{from_key}_i{d}max.tif")
             if not (os.path.exists(clim_tif) and os.path.exists(obs_tif)):
                 continue
             obs_in = obs_tif
@@ -1025,9 +1026,9 @@ def _run_climate(args, *, src, from_key, out_dir, key, bounds, clip_gdf,
                 from .smoothing import smooth_dataarray
                 obs_in = smooth_dataarray(obs_tif, osm, osr)
             ratio = atlas14.anomaly(obs_in, clim_tif, eps=args.eps)
-            atif = os.path.join(out_dir, f"{key}_anom_i{d}.tif")
+            atif = out_path(out_dir, f"{key}_anom_i{d}.tif")
             ratio.rio.to_raster(atif)
-            out = os.path.join(out_dir, f"{key}_anom_i{d}.png")
+            out = out_path(out_dir, f"{key}_anom_i{d}.png")
             anomaly_map(ratio, hillshade=hillshade, work_crs=work_crs,
                         duration=d, ari=args.ari,
                         cmap=args.anomaly_cmap, perimeters=args.perimeters,
@@ -1054,7 +1055,7 @@ def _cmd_climate(args):
     src, from_key = args.from_dir, args.from_key
     key = args.key or from_key
 
-    obs_i15 = os.path.join(src, f"{from_key}_i15max.tif")
+    obs_i15 = find(src, f"{from_key}_i15max.tif")
     if not os.path.exists(obs_i15):
         sys.exit(f"error: {obs_i15} not found (need the observed i15max field)")
 
@@ -1082,7 +1083,7 @@ def _cmd_climate(args):
                   "(pass --aoi/--bbox to match the i15 maps)")
     clip_gdf = gpd.GeoDataFrame(geometry=[geom or bbox_polygon(bounds)], crs=4326)
 
-    hs_path = args.hillshade or os.path.join(src, f"{from_key}_hillshade.tif")
+    hs_path = args.hillshade or find(src, f"{from_key}_hillshade.tif")
     if not os.path.exists(hs_path):
         print(f"note: hillshade {hs_path} not found; rendering without terrain")
         hs_path = None
@@ -1090,7 +1091,7 @@ def _cmd_climate(args):
     # 3xN comparison + N anomaly figures don't each re-process a big raster
     hs_da, hs_wc = ((None, "UTM") if hs_path is None
                     else _prepare_hillshade(hs_path, "UTM", _render_px(args.dpi)))
-    gpath = os.path.join(src, f"{from_key}_gauges.geojson")
+    gpath = find(src, f"{from_key}_gauges.geojson")
     have_gauges = args.gauges and os.path.exists(gpath)
     if args.gauges and not have_gauges:
         print(f"note: {gpath} not found; skipping gauge overlay")
@@ -1174,7 +1175,7 @@ def _cmd_export(args):
     # terrain backdrop + the figure CRS. Default --pdf-crs UTM renders the GeoPDF
     # identically to the PNG deliverables; the georeferencing is exact in whatever
     # projected CRS we render in (pass EPSG:3857 to match the GeoTIFF layers).
-    hs_path = args.hillshade or os.path.join(src, f"{from_key}_hillshade.tif")
+    hs_path = args.hillshade or find(src, f"{from_key}_hillshade.tif")
     if not os.path.exists(hs_path):
         print(f"note: hillshade {hs_path} not found; rendering without terrain")
         hs_path = None
@@ -1182,7 +1183,7 @@ def _cmd_export(args):
                     else _prepare_hillshade(hs_path, args.pdf_crs,
                                             _render_px(args.dpi)))
 
-    gpath = os.path.join(src, f"{from_key}_gauges.geojson")
+    gpath = find(src, f"{from_key}_gauges.geojson")
     have_gauges = args.gauges and os.path.exists(gpath)
     if args.gauges and not have_gauges:
         print(f"note: {gpath} not found; skipping gauge overlay")
@@ -1190,7 +1191,7 @@ def _cmd_export(args):
 
     # i15-map GeoPDF
     if not args.no_i15:
-        i15_tif = os.path.join(src, f"{from_key}_i15max.tif")
+        i15_tif = find(src, f"{from_key}_i15max.tif")
         if not os.path.exists(i15_tif):
             print(f"note: {i15_tif} not found; skipping the i15 GeoPDF")
         else:
@@ -1207,7 +1208,7 @@ def _cmd_export(args):
                 north_arrow=True, scale_ticks=True,
                 legend=("gauges" if gauges_gdf is not None else "all"),
                 clip=clip_gdf, clip_margin=args.clip_margin, dpi=args.dpi)
-            out_pdf = os.path.join(args.out_dir, f"{key}.pdf")
+            out_pdf = out_path(args.out_dir, f"{key}.pdf")
             _export.figure_to_geopdf(fig, ax, out_pdf, crs=hs_wc, dpi=args.dpi,
                                      title=f"{key} peak i15",
                                      subject="peak 15-min rainfall intensity (mm/h)")
@@ -1217,7 +1218,7 @@ def _cmd_export(args):
     # anomaly-map GeoPDF (needs <from-key>_anom_i<d>.tif from `climate`)
     if not args.no_anom:
         d = args.anom_duration
-        anom_tif = os.path.join(src, f"{from_key}_anom_i{d}.tif")
+        anom_tif = find(src, f"{from_key}_anom_i{d}.tif")
         if not os.path.exists(anom_tif):
             print(f"note: {anom_tif} not found; skipping the anomaly GeoPDF "
                   f"(run `climate` first to write it)")
@@ -1229,7 +1230,7 @@ def _cmd_export(args):
                 reference=args.reference, local_roads=args.local_roads,
                 label_reference=not args.no_reference_labels, alpha=args.alpha,
                 clip=clip_gdf, clip_margin=args.clip_margin, dpi=args.dpi)
-            out_pdf = os.path.join(args.out_dir, f"{key}_anom_i{d}.pdf")
+            out_pdf = out_path(args.out_dir, f"{key}_anom_i{d}.pdf")
             _export.figure_to_geopdf(fig, ax, out_pdf, crs=hs_wc, dpi=args.dpi,
                                      title=f"{key} I{d} anomaly",
                                      subject=f"observed I{d} / {args.ari}-yr "
@@ -1245,7 +1246,7 @@ def _analysis_gauges(args, src, from_key):
     import geopandas as gpd
     if getattr(args, "gauges_file", None):
         return gpd.read_file(args.gauges_file)
-    gpath = os.path.join(src, f"{from_key}_gauges.geojson")
+    gpath = find(src, f"{from_key}_gauges.geojson")
     if os.path.exists(gpath):
         return gpd.read_file(gpath)
     g, _, _ = _fetch_gauges(args)
@@ -1331,7 +1332,7 @@ def _cmd_recurrence(args):
     src, from_key = args.from_dir, args.from_key
     key = args.key or from_key
     durations = tuple(args.durations)
-    gpath = args.gauges_file or os.path.join(src, f"{from_key}_gauges.geojson")
+    gpath = args.gauges_file or find(src, f"{from_key}_gauges.geojson")
     if not os.path.exists(gpath):
         sys.exit(f"error: {gpath} not found (need the event gauges geojson)")
     gauges = gpd.read_file(gpath)
@@ -1340,7 +1341,7 @@ def _cmd_recurrence(args):
     # fall back to scanning the series CSVs if the geojson lacks the column.
     peak_times = None
     if not args.no_peak_time and "i15_peak_time" not in gauges.columns:
-        rgd = args.raingauge_dir or os.path.join(src, "RainGaugeData")
+        rgd = args.raingauge_dir or find_subdir(src, "RainGaugeData")
         names = list(gauges["name"]) if "name" in gauges.columns else []
         peak_times = _gauge_peak_times(rgd, from_key, names, duration=15)
         if not peak_times:
@@ -1353,7 +1354,7 @@ def _cmd_recurrence(args):
         from .aoi import load_aoi
         aoi_bounds, _ = load_aoi(_aoi_from_args(args))
     else:
-        i15tif = os.path.join(src, f"{from_key}_i15max.tif")
+        i15tif = find(src, f"{from_key}_i15max.tif")
         if os.path.exists(i15tif):
             import rioxarray
             with rioxarray.open_rasterio(i15tif) as d:
@@ -1374,9 +1375,9 @@ def _cmd_recurrence(args):
                   f"from the AOI (regional outliers)")
 
     with_time = "i15_peak_time" in df.columns
-    csv = os.path.join(args.out_dir, f"{key}_gauge_recurrence.csv")
+    csv = out_path(args.out_dir, f"{key}_gauge_recurrence.csv")
     df.to_csv(csv, index=False)
-    md = os.path.join(args.out_dir, f"{key}_gauge_recurrence.md")
+    md = out_path(args.out_dir, f"{key}_gauge_recurrence.md")
     _write_recurrence_md(df, durations, md, with_time)
     print(f"wrote {csv}\nwrote {md}")
     rare = df[pd.to_numeric(df.get("RI_i15"), errors="coerce").fillna(0) >= 1]
@@ -1397,19 +1398,19 @@ def _cmd_smooth(args):
     src, from_key = args.from_dir, args.from_key
     key = args.key or from_key
 
-    field_tif = os.path.join(src, f"{from_key}_{args.field}.tif")
+    field_tif = find(src, f"{from_key}_{args.field}.tif")
     if not os.path.exists(field_tif):
         sys.exit(f"error: {field_tif} not found (need the observed "
                  f"{args.field} field)")
 
-    hs_path = args.hillshade or os.path.join(src, f"{from_key}_hillshade.tif")
+    hs_path = args.hillshade or find(src, f"{from_key}_hillshade.tif")
     if not os.path.exists(hs_path):
         print(f"note: hillshade {hs_path} not found; rendering without terrain")
         hs_path = None
     # gauge overlay: --gauges-file overrides the auto-located <from-key>_gauges
     # (so a NEXRAD field dir can borrow the event's MRMS-keyed gauges file)
     overlay_path = getattr(args, "gauges_file", None) or \
-        os.path.join(src, f"{from_key}_gauges.geojson")
+        find(src, f"{from_key}_gauges.geojson")
     have_gauges = args.gauges and os.path.exists(overlay_path)
     if args.gauges and not have_gauges:
         print(f"note: {overlay_path} not found; skipping gauge overlay")
@@ -1430,7 +1431,7 @@ def _cmd_smooth(args):
 
     # 1) methods x radii comparison figure
     if not args.no_comparison:
-        out = os.path.join(args.out_dir, f"{key}_smoothing_compare.png")
+        out = out_path(args.out_dir, f"{key}_smoothing_compare.png")
         smoothing_comparison(
             src, from_key, field=args.field, methods=tuple(args.methods),
             radii_km=tuple(args.radii), hillshade=hs_path,
@@ -1453,9 +1454,9 @@ def _cmd_smooth(args):
             radii_km=tuple(args.sweep), durations=tuple(args.durations),
             rqi_min=args.rqi_min, max_report_min=args.max_report_min,
             power=args.power)
-        csv = os.path.join(args.out_dir, f"{key}_smoothing_skill.csv")
+        csv = out_path(args.out_dir, f"{key}_smoothing_skill.csv")
         sweep.to_csv(csv, index=False)
-        png = os.path.join(args.out_dir, f"{key}_smoothing_skill.png")
+        png = out_path(args.out_dir, f"{key}_smoothing_skill.png")
         smoothing_skill_plot(sweep, durations=tuple(args.durations),
                              out_path=png, dpi=args.dpi)
         print(f"wrote {csv}\nwrote {png}")
@@ -1541,6 +1542,20 @@ def _add_aoi(p):
                    help="working CRS for DEM/figure (default EPSG:5070)")
     p.add_argument("--out-dir", default="stormscape_out", help="output directory")
     p.add_argument("--key", help="filename stem for outputs")
+    _add_layout(p)
+
+
+def _add_layout(p):
+    """``--flat`` opts out of the sorted figures/rasters/tables/vectors layout.
+
+    Reading is unaffected -- every ``--from-dir`` / ``--radar-dir`` resolves
+    both layouts -- so this only changes where a run *writes*.
+    """
+    p.add_argument("--flat", dest="layout", action="store_const",
+                   const="flat", default=None,
+                   help="write products straight into --out-dir instead of "
+                        "sorting them into figures/ rasters/ tables/ vectors/ "
+                        "(also settable with $STORMSCAPE_LAYOUT=flat)")
 
 
 def _add_overlays(p):
@@ -1651,6 +1666,7 @@ def main(argv=None):
     pm.add_argument("--out-dir", default=".")
     pm.add_argument("--key")
     pm.add_argument("--dst-crs", default="EPSG:5070")
+    _add_layout(pm)                     # only bites when --out is not given
     _add_overlays(pm)
     pm.set_defaults(func=_cmd_map)
 
@@ -2100,6 +2116,12 @@ def main(argv=None):
     psm.set_defaults(func=_cmd_smooth)
 
     args = ap.parse_args(argv)
+    # One switch for the whole process rather than threading `layout=` through
+    # every writer: `out_path`/`subdir` read $STORMSCAPE_LAYOUT by default, so
+    # setting it here makes --flat reach library calls (mrms.save_fields,
+    # gauges.fetch_gauge_event, ...) without changing their call sites.
+    if getattr(args, "layout", None):
+        os.environ["STORMSCAPE_LAYOUT"] = args.layout
     args.func(args)
 
 

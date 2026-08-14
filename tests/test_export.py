@@ -162,8 +162,13 @@ def test_export_geotiffs_rgba_has_a_tagged_alpha_band(field_tif, tmp_path):
     d = tmp_path / "src"
     d.mkdir()
     field_tif(np.random.RandomState(4).rand(10, 10) * 100, name="src/ev_i15max.tif")
-    export.export_geotiffs(str(d), "ev", str(tmp_path / "o"), fields=("i15max",))
-    with rasterio.open(tmp_path / "o" / "ev_i15max_3857_rgb.tif") as ds:
+    written = export.export_geotiffs(str(d), "ev", str(tmp_path / "o"),
+                                     fields=("i15max",))
+    # assert on the returned path, not a hand-built one: products are sorted
+    # into rasters/ by default (stormscape.layout) and the contract under test
+    # is the RGBA alpha tagging, not the directory
+    rgb = next(p for p in written if p.endswith("_rgb.tif"))
+    with rasterio.open(rgb) as ds:
         assert ds.count == 4
         assert ds.colorinterp[3] == ColorInterp.alpha
 

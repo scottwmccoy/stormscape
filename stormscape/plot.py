@@ -754,7 +754,7 @@ def diagnostic_panels(radar_dir, key, which=("tpki15", "total", "rqi", "shsr"),
         smooth_label = f"{_SM.get(field_smooth, field_smooth)} {field_smooth_radius_km:g} km"
     das = {}
     for name in which:
-        p = os.path.join(radar_dir, f"{key}_{name}.tif")
+        p = find(radar_dir, f"{key}_{name}.tif")
         if os.path.exists(p):
             da = _load(p)
             if smoothing_on and name in _MASK_DRY:
@@ -912,8 +912,8 @@ def climatology_comparison(clim_dir, obs_dir, key, durations=(15, 30, 60),
     smoothing_on = bool(obs_smooth) and obs_smooth_radius_km and obs_smooth_radius_km > 0
     rows = []
     for d in durations:
-        cp = os.path.join(clim_dir, f"{key}_clim_i{d}.tif")
-        op = os.path.join(obs_dir, f"{okey}_i{d}max.tif")
+        cp = find(clim_dir, f"{key}_clim_i{d}.tif")
+        op = find(obs_dir, f"{okey}_i{d}max.tif")
         if os.path.exists(cp) and os.path.exists(op):
             obs_da = _load(op)
             if smoothing_on:
@@ -1100,7 +1100,7 @@ def smoothing_comparison(in_dir, key, field="i15max",
     from . import smoothing as _sm
     if hillshade_alpha is None:                        # opaque base (no basemap here)
         hillshade_alpha = 1.0
-    fpath = os.path.join(in_dir, f"{key}_{field}.tif")
+    fpath = find(in_dir, f"{key}_{field}.tif")
     if not os.path.exists(fpath):
         raise FileNotFoundError(f"field tif not found: {fpath}")
     da_native = _load(fpath)

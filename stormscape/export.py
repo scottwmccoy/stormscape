@@ -30,6 +30,8 @@ from typing import Optional, Sequence, Union
 
 import numpy as np
 
+from .layout import find, out_path
+
 WEB_MERCATOR = "EPSG:3857"
 
 # field suffixes (after "<key>_") exported to EPSG:3857 by default -- the
@@ -176,11 +178,11 @@ def export_geotiffs(in_dir: str, key: str, out_dir: str,
     os.makedirs(out_dir, exist_ok=True)
     written = []
     for field in fields:
-        src = os.path.join(in_dir, f"{key}_{field}.tif")
+        src = find(in_dir, f"{key}_{field}.tif")
         if not os.path.exists(src):
             print(f"note: {src} not found; skipping {field}")
             continue
-        raw_path = os.path.join(out_dir, f"{out_key}_{field}_{tag}.tif")
+        raw_path = out_path(out_dir, f"{out_key}_{field}_{tag}.tif")
         reproject_geotiff(src, raw_path, dst_crs=dst_crs)
         if colorize and not _is_categorical(field):
             da = _open_rio(raw_path)
@@ -190,7 +192,7 @@ def export_geotiffs(in_dir: str, key: str, out_dir: str,
                 wet_min=wet_min, vmax=vmax)
             rgba = _colormap_rgba(arr, sty, vmin, vmx, norm=norm,
                                   mask_below=mask_below)
-            rgb_path = os.path.join(out_dir, f"{out_key}_{field}_{tag}_rgb.tif")
+            rgb_path = out_path(out_dir, f"{out_key}_{field}_{tag}_rgb.tif")
             _write_rgba(rgb_path, rgba, da.rio.transform(), da.rio.crs)
             written.append(rgb_path)
         if raw:

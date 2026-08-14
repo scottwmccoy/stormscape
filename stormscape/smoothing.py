@@ -70,6 +70,8 @@ import pandas as pd
 import rasterio
 from scipy import ndimage as ndi
 
+from .layout import find, out_path
+
 # rainfall intensity / depth fields -> smoothable
 DEFAULT_SMOOTH_FIELDS = ("i15max", "i30max", "i60max", "i2max", "total",
                          "peakrate_mmph", "mstotal")
@@ -260,10 +262,10 @@ def smooth_event_fields(in_dir: str, key: str, out_dir: str, out_key: str,
     for f in fields:
         if f in NEVER_SMOOTH:
             continue
-        ip = os.path.join(in_dir, f"{key}_{f}.tif")
+        ip = find(in_dir, f"{key}_{f}.tif")
         if not os.path.exists(ip):
             continue
-        op = os.path.join(out_dir, f"{out_key}_{f}.tif")
+        op = out_path(out_dir, f"{out_key}_{f}.tif")
         smooth_tif(ip, op, method, radius_km, power=power)
         written.append(op)
     return written
@@ -279,7 +281,7 @@ def smooth_dataarray(src, method: str, radius_km: float, power: float = 2.0):
     geotransform (geographic grids use the centre-latitude east-west size). A
     falsy ``method`` or ``radius_km <= 0`` returns the (loaded) field unchanged.
     """
-    import rioxarray  # noqa: F401  -- registers the .rio accessor; lazy import
+    import rioxarray
     if isinstance(src, str):
         with rioxarray.open_rasterio(src, masked=True) as d:   # close promptly
             da = d.load()
@@ -351,7 +353,7 @@ def gauge_skill_sweep(gauges, in_dir: str, key: str,
 
     rqi_vals = None
     if rqi_min is not None:
-        rqi_path = os.path.join(in_dir, f"{key}_rqi.tif")
+        rqi_path = find(in_dir, f"{key}_rqi.tif")
         if os.path.exists(rqi_path):
             rqi_vals = sample_raster_at_points(gauges, rqi_path)
 
@@ -360,7 +362,7 @@ def gauge_skill_sweep(gauges, in_dir: str, key: str,
         gcol = gcol_for[d]
         if gcol not in getattr(gauges, "columns", []):
             continue
-        path = os.path.join(in_dir, f"{key}_i{d}max.tif")
+        path = find(in_dir, f"{key}_i{d}max.tif")
         if not os.path.exists(path):
             continue
         arr, transform, crs, cell_km, _ = _read_field(path)

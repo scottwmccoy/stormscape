@@ -659,6 +659,26 @@ kept, and 2-min `PrecipRate` is stacked over each contiguous wet run.
   grids on the PFDS GIS server (`hdsc.nws.noaa.gov/pub/hdsc/data/...`); region
   extents bundled in `data/atlas14_regions.csv`.
 
+## Output layout
+
+Products are sorted by kind inside `--out-dir`:
+
+```
+<out-dir>/
+  figures/    *.png *.pdf   (+ VirtualGaugeFigures/ per-gauge detail figures)
+  rasters/    *.tif         i15/i30/i60, totals, tpki15, rqi, shsr, clim, anom, DEM, hillshade
+  tables/     *.csv *.md    comparison tables, recurrence
+  vectors/    *.geojson     event AOI, gauge store
+  RainGaugeData/  nexrad_cache/  atlas14_cache/     stores and inputs, left at the root
+```
+
+**Reading is layout-agnostic.** Every `--from-dir` / `--radar-dir` resolves the
+sorted subdirectory first and falls back to the flat path, so event folders
+written by earlier versions keep working with no migration.
+
+Pass `--flat` (or set `STORMSCAPE_LAYOUT=flat`) to write everything straight
+into `--out-dir`, as before.
+
 ## Layout
 
 ```
@@ -670,6 +690,7 @@ stormscape/
 │   ├── nexrad.py    single-radar NEXRAD Level II tilts + intensity stacks
 │   ├── gauges.py    Synoptic/MesoWest gauges -> total + peak 15/30/60 intensities
 │   ├── compare.py   sample radar at gauges -> residuals, skill stats, recurrence
+│   ├── layout.py    where products land under --out-dir (figures/rasters/tables/vectors)
 │   ├── merge.py     radar-gauge bias correction + conditional merge
 │   ├── atlas14.py   NOAA Atlas 14 climatology grids -> intensity fields + anomaly
 │   ├── smoothing.py NaN-aware field smoothing + radar-gauge skill sweep
