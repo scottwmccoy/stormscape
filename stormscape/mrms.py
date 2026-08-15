@@ -19,10 +19,18 @@ steps) scaled to mm/h, kept as per-cell running maxima alongside ``i15max``.
 Storm-window detection
 ----------------------
 Hourly ``RadarOnly_QPE_01H`` is scanned over the UTC window covering the
-local calendar day; each hour's areal maximum over the AOI is taken, the
-wettest hours (> ``qpe_thresh``, capped at ``max_wet_hours``) are kept, and
-2-min ``PrecipRate`` is stacked over each contiguous run (with a 14-min lead
-so the rolling i15 is defined from the run's first wet minute).
+local calendar day (or an explicit ``window``); each hour's areal maximum over
+the AOI is taken, the wettest hours (> ``qpe_thresh``, capped at
+``max_wet_hours``) are kept, and 2-min ``PrecipRate`` is stacked over each
+contiguous run.
+
+**Hourly QPE is stamped at the END of the hour it describes.** ``QPE(HH)`` is
+the rain that fell in ``[HH-1, HH]``. Verified against the 2-min ``PrecipRate``
+accumulation on independent hours: the ratio over ``[HH-1, HH]`` is 1.000,
+while ``[HH, HH+1]`` gives 0.13-0.33. So a run of wet stamps ``[h0..hn]``
+describes rain over ``[h0-1h, hn]``, and that -- plus a 14-minute lead so the
+rolling i15 is defined from the run's first wet minute -- is the span stacked.
+Getting this backwards silently truncates the front of a storm.
 
 Outputs are AOI-clipped GeoTIFFs in EPSG:4326 (the native MRMS grid):
 ``i15max, i30max, i60max, i2max, total, tpki15`` (UTC hour of peak i15),
@@ -305,8 +313,14 @@ def i15_storm_day(aoi, date=None, pad_deg=0.05, qpe_thresh=QPE_THRESH,
     tpki15 = np.full(shape, np.nan, np.float32)
 
     for run in contiguous_runs(list(wet.t)):
-        t0 = run[0] - dt.timedelta(minutes=14)   # lead so rolling i15 is valid
-        t1 = run[-1] + dt.timedelta(hours=1)
+        # Hourly QPE stamped HH covers the hour ENDING at HH (see the module
+        # docstring), so a run of wet stamps [h0..hn] describes rain over
+        # [h0-1h, hn] -- NOT [h0, hn+1h]. Reading the latter skipped up to
+        # 46 min at the start of the first wet hour and spent a fetch on a
+        # usually-dry trailing hour. The extra 14 min is the lead-in that makes
+        # the rolling i15 valid from the run's first wet minute.
+        t0 = run[0] - dt.timedelta(hours=1, minutes=14)
+        t1 = run[-1]
         steps = list(pd.date_range(t0, t1, freq="2min"))
         arrs = fetch_many("PrecipRate", steps, win, workers=workers)
         stack = []

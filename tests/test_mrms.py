@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from stormscape import mrms
@@ -217,3 +218,57 @@ def test_window_start_is_floored_to_the_hour():
 def test_a_date_or_a_window_is_required():
     with pytest.raises(ValueError):
         mrms.window_hours()
+
+
+# --------------------------------------------------------------------------- #
+# the stacked span — hourly QPE is stamped at the END of the hour it describes
+# --------------------------------------------------------------------------- #
+def _stacked_span(monkeypatch, wet_stamps):
+    """The (t0, t1) i15_storm_day actually fetches PrecipRate over."""
+    seen = {}
+    monkeypatch.setattr(mrms, "load_aoi",
+                        lambda *a, **k: ((-119.8, 39.4, -119.5, 39.7), None))
+    monkeypatch.setattr(mrms, "find_wet_hours",
+                        lambda *a, **k: (pd.DataFrame({"t": wet_stamps}),
+                                         pd.DataFrame({"t": wet_stamps,
+                                                       "qmax": [9.0] * len(wet_stamps)})))
+
+    def fake_fetch_many(product, times, win, workers=None):
+        times = list(times)
+        seen.setdefault(product, []).append((times[0], times[-1]))
+        return {}                       # empty -> stack resets, loop still runs
+
+    monkeypatch.setattr(mrms, "fetch_many", fake_fetch_many)
+    # RQI/SHSR go through `fetch` (singular), not fetch_many — without this the
+    # test makes real S3 requests and CI (-m "not network") would break.
+    monkeypatch.setattr(mrms, "fetch",
+                        lambda product, t, win: np.ones((2, 2), np.float32))
+    mrms.i15_storm_day("aoi", dt.date(2026, 8, 13), verbose=False)
+    return seen["PrecipRate"][0]
+
+
+def test_stack_covers_the_hour_each_wet_stamp_describes(monkeypatch):
+    """QPE(HH) is the rain in [HH-1, HH] — verified against the 2-min
+    accumulation (ratio 1.000 vs 0.13-0.33 for [HH, HH+1]). So wet stamps
+    [20Z..23Z] must be stacked over [19Z, 23Z], plus the 14-min i15 lead."""
+    wet = [dt.datetime(2026, 8, 13, h) for h in (20, 21, 22, 23)]
+    t0, t1 = _stacked_span(monkeypatch, wet)
+    assert t0 == dt.datetime(2026, 8, 13, 18, 46)     # 20Z - 1h - 14min
+    assert t1 == dt.datetime(2026, 8, 13, 23)         # last wet stamp
+
+
+def test_stack_does_not_run_past_the_last_wet_hour(monkeypatch):
+    """The old span ran to hn+1h, spending a fetch on a usually-dry hour while
+    missing the front of the storm."""
+    wet = [dt.datetime(2026, 8, 13, 20)]
+    t0, t1 = _stacked_span(monkeypatch, wet)
+    assert t1 == dt.datetime(2026, 8, 13, 20)
+    assert (t1 - t0) == dt.timedelta(hours=1, minutes=14)
+
+
+def test_a_single_wet_hour_still_gets_the_i15_lead_in(monkeypatch):
+    """8 two-minute steps are needed before i15 is defined; the lead must be
+    at least that (14 min = 7 steps before the hour's first minute)."""
+    wet = [dt.datetime(2026, 8, 13, 20)]
+    t0, _ = _stacked_span(monkeypatch, wet)
+    assert t0 <= dt.datetime(2026, 8, 13, 19) - dt.timedelta(minutes=14)

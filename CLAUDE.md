@@ -884,6 +884,28 @@ in `README.md`.
   `--from-dir <event>`. Climbing is **only ever a fallback**: a local hit still
   wins, and an ordinary directory that merely happens to be named `rasters`
   gains nothing it would not otherwise find.
+- **Hourly QPE is stamped at the END of its hour — the stack span was off by
+  ~1 h (fixed 2026-08-15).** `QPE(HH)` is the rain in `[HH-1, HH]`. Measured,
+  not assumed: the 2-min `PrecipRate` accumulation over `[HH-1, HH]` matches
+  `QPE(HH)` at a **median ratio of 1.000**, while `[HH, HH+1]` gives 0.13–0.33
+  (checked on two independent hours, 20260815-00Z and 20260813-21Z). So a run of
+  wet stamps `[h0..hn]` describes rain over `[h0-1h, hn]`. `i15_storm_day` was
+  stacking `[h0-14min, hn+1h]` — shifted a full hour late, so it **skipped up to
+  46 min at the front of the first wet hour** and spent a fetch on a
+  usually-dry trailing hour. The unread slice held **68.7%** of the first wet
+  hour's rain on 20260813 (14.9 mm in a cell), 43.2% on 20260814, 14.9% on
+  20260812. Now `t0 = h0 - 1h - 14min`, `t1 = hn` (the 14 min is the lead-in
+  that makes the rolling i15 valid from the run's first wet minute).
+  **No published number changed** — re-stacking 20260813 gives identical
+  AOI values (i15max 86.60, i30max 62.41, i60max 41.67) and identical per-fire
+  maxima; the 222 cells that do read higher all fall outside the perimeters.
+  The bug predates the window work; making `wet_window`'s convention explicit is
+  what surfaced the contradiction. Tests pin the span, and the module docstring
+  now states the convention, because getting it backwards silently truncates the
+  front of a storm rather than failing.
+  **Gotcha for anyone testing this:** RQI/SHSR are read with `fetch` (singular),
+  not `fetch_many` — mock both or the "offline" test hits S3 and CI's
+  `-m "not network"` run breaks.
 - **Testing (`tests/`, pytest, added 2026-07-29) — run it before every push.**
   `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **232 tests,
   ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14 request, no
