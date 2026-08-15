@@ -761,6 +761,27 @@ python -m stormscape i15 --aoi fire.geojson --start 202608142000 --end 202608150
 These are the same `--start`/`--end` the gauge side uses: one pair of flags
 scopes the radar stack and the gauges alike.
 
+**Long storms and multi-storm windows need `--max-wet-hours`.** Only *wet*
+hours are stacked, capped at 8 by default — and the cap keeps the most
+**intense** ones, so a longer storm loses its weakest hours, which are usually
+its opening and closing tails. Because those hours also bound the stacked span,
+the storm total comes out short. stormscape warns when the cap actually binds,
+naming the hours it dropped:
+
+```
+UserWarning: 20 wet hours found but only the 8 most intense are kept: dropping
+08-12 21Z, 08-12 22Z, ... Storm totals and the stacked span will be short --
+raise max_wet_hours (CLI --max-wet-hours) to keep the whole storm.
+```
+
+A single evening thunderstorm rarely exceeds 8 wet hours; a window spanning
+several storms essentially always does.
+
+```bash
+python -m stormscape i15 --aoi fire.geojson \
+    --start 202608121800 --end 202608150300 --max-wet-hours 24
+```
+
 ## Output layout
 
 Products are sorted by kind inside `--out-dir`:

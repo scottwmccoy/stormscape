@@ -22,7 +22,9 @@ Hourly ``RadarOnly_QPE_01H`` is scanned over the UTC window covering the
 local calendar day (or an explicit ``window``); each hour's areal maximum over
 the AOI is taken, the wettest hours (> ``qpe_thresh``, capped at
 ``max_wet_hours``) are kept, and 2-min ``PrecipRate`` is stacked over each
-contiguous run.
+contiguous run. The cap ranks by *intensity*, so it discards a long storm's
+weakest hours and shortens the stacked span; :func:`find_wet_hours` warns
+whenever it binds.
 
 **Hourly QPE is stamped at the END of the hour it describes.** ``QPE(HH)`` is
 the rain that fell in ``[HH-1, HH]``. Verified against the 2-min ``PrecipRate``
@@ -195,7 +197,12 @@ def window_hours(date0=None, scan_pad_h=SCAN_PAD_H, window=None):
 
 def find_wet_hours(date0, win, qpe_thresh=QPE_THRESH, max_wet_hours=MAX_WET_HRS,
                    scan_pad_h=SCAN_PAD_H, workers=WORKERS, window=None):
-    """Scan hourly QPE; return (wet-hour DataFrame, full scan DataFrame)."""
+    """Scan hourly QPE; return (wet-hour DataFrame, full scan DataFrame).
+
+    Warns when more than ``max_wet_hours`` hours are wet: the cap keeps the most
+    *intense* ones, so the storm's weak opening/closing hours are dropped and
+    the stacked span shortens with nothing downstream to show for it.
+    """
     hours = window_hours(date0, scan_pad_h, window)
     arrs = fetch_many("RadarOnly", hours, win, workers=workers)
     rec = pd.DataFrame(
@@ -205,6 +212,26 @@ def find_wet_hours(date0, win, qpe_thresh=QPE_THRESH, max_wet_hours=MAX_WET_HRS,
     wet = rec[rec.qmax > qpe_thresh].sort_values("qmax", ascending=False)
     if wet.empty:                          # fall back to the single best hour
         wet = rec.sort_values("qmax", ascending=False).head(1)
+    if len(wet) > max_wet_hours:
+        # The cap ranks by INTENSITY, so what it discards are the storm's
+        # weakest hours -- typically its opening and closing tails. Those hours
+        # also bound the stacked span: dropping a trailing wet stamp shortens
+        # the contiguous run, so `total` loses that hour's rain outright and the
+        # rolling i15/i30/i60 never see it. Nothing downstream can tell this
+        # happened -- `n_wet_hr` reports what was KEPT -- so warn rather than
+        # truncate quietly. Warn, don't refuse: the cap is a real cost control
+        # and a caller may genuinely want the most intense hours only.
+        dropped = wet.iloc[max_wet_hours:].sort_values("t")
+        warnings.warn(
+            f"{len(wet)} wet hours found but only the {max_wet_hours} most "
+            f"intense are kept: dropping "
+            f"{', '.join(t.strftime('%m-%d %HZ') for t in dropped.t)} "
+            f"(weakest kept {wet.qmax.iloc[max_wet_hours - 1]:.1f} mm, "
+            f"strongest dropped {dropped.qmax.max():.1f} mm). "
+            "Storm totals and the stacked span will be short -- raise "
+            "max_wet_hours (CLI --max-wet-hours) to keep the whole storm. "
+            "Multi-storm windows essentially always need it raised.",
+            stacklevel=2)
     wet = wet.head(max_wet_hours).sort_values("t")
     return wet, rec
 

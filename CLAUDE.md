@@ -910,6 +910,29 @@ in `README.md`.
   **Gotcha for anyone testing this:** RQI/SHSR are read with `fetch` (singular),
   not `fetch_many` — mock both or the "offline" test hits S3 and CI's
   `-m "not network"` run breaks.
+- **`max_wet_hours` warns when it truncates (2026-08-15) — `find_wet_hours`.**
+  `MAX_WET_HRS = 8` caps the processed wet hours, but it ranks them by
+  **intensity**, so what it discards is a long storm's weakest hours — normally
+  its opening and closing tails. Those hours also *bound the stacked span*:
+  dropping a trailing wet stamp shortens the contiguous run, so `total` loses
+  that rain outright and the rolling i15/i30/i60 never see it. Nothing
+  downstream could tell — `n_wet_hr` reports what was **kept**, so a truncated
+  run looks like a complete one.
+  **Found by consumers, not by tests.** Stacking the three Bug/Stallion storms
+  (12–14 Aug 2026) into one composite made `max(3 individual storms) ==
+  composite` checkable for the first time, and it failed: the composite was
+  higher at 684 cells. Cause — the **published 13 Aug analysis has 9 wet hours,
+  one over the cap, and silently lost its 04Z tail** (6.0 mm). Impact there was
+  small (all per-fire maxima unchanged; Stallion i15 areal mean 11.58 → 11.84
+  mm/h, total 5.73 → 5.89 mm) but it was invisible. On the 3-day window the cap
+  drops **12 of 20** wet hours. Single-storm runs can never surface this — only
+  a multi-storm stack cross-checked against its parts.
+  Now warns naming the dropped stamps, the weakest kept vs strongest dropped
+  qmax, and `--max-wet-hours`. **Warn, don't refuse** (same call as
+  `nexrad.BULK_SCAN_WARN`): the cap is a real cost control and some callers do
+  want the most intense hours only. Tests cover the truncating case, the dropped
+  hour being the *weakest* not the last, the shortened span, and — importantly —
+  that the sub-cap and all-dry-fallback paths stay silent.
 - **Near-real-time burn severity (`burn.py`, CLI `burn`, 2026-08-14) — CIMSS
   BRISK.** Puts a scar under the rain *while the fire is still burning*, which the
   authoritative products cannot: BAER soil burn severity lands days-to-weeks after

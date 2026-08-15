@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -272,3 +273,90 @@ def test_a_single_wet_hour_still_gets_the_i15_lead_in(monkeypatch):
     wet = [dt.datetime(2026, 8, 13, 20)]
     t0, _ = _stacked_span(monkeypatch, wet)
     assert t0 <= dt.datetime(2026, 8, 13, 19) - dt.timedelta(minutes=14)
+
+
+# --------------------------------------------------------------------------- #
+# the max_wet_hours cap — it ranks by INTENSITY, so it drops the storm's tails
+# --------------------------------------------------------------------------- #
+def _find_wet_over(monkeypatch, qmax_by_hour, window, **kw):
+    """Run find_wet_hours with fetch_many faked from {hour: areal-max mm}."""
+    def fake_fetch_many(product, times, win, workers=None):
+        return {t: np.full((2, 2), qmax_by_hour.get(t, 0.0)) for t in times}
+    monkeypatch.setattr(mrms, "fetch_many", fake_fetch_many)
+    return mrms.find_wet_hours(None, object(), window=window, **kw)
+
+
+# the real 13 Aug 2026 Bug/Stallion storm: 9 wet hours, one over the default cap
+_AUG13 = {dt.datetime(2026, 8, 13, 20): 21.7,
+          dt.datetime(2026, 8, 13, 21): 38.7,
+          dt.datetime(2026, 8, 13, 22): 38.0,
+          dt.datetime(2026, 8, 13, 23): 13.7,
+          dt.datetime(2026, 8, 14, 0): 10.0,
+          dt.datetime(2026, 8, 14, 1): 25.2,
+          dt.datetime(2026, 8, 14, 2): 17.2,
+          dt.datetime(2026, 8, 14, 3): 8.4,
+          dt.datetime(2026, 8, 14, 4): 6.0}
+_AUG13_WINDOW = (dt.datetime(2026, 8, 13, 18), dt.datetime(2026, 8, 14, 5))
+
+
+def test_find_wet_hours_warns_when_the_cap_truncates(monkeypatch):
+    """9 wet hours against a cap of 8 must say so — this went unnoticed once."""
+    with pytest.warns(UserWarning, match="9 wet hours found"):
+        wet, _ = _find_wet_over(monkeypatch, _AUG13, _AUG13_WINDOW,
+                                max_wet_hours=8)
+    assert len(wet) == 8
+
+
+def test_the_truncation_warning_names_the_dropped_hour(monkeypatch):
+    """Naming the hour is the point: it tells you which end of the storm was lost."""
+    with pytest.warns(UserWarning, match=r"08-14 04Z") as rec:
+        _find_wet_over(monkeypatch, _AUG13, _AUG13_WINDOW, max_wet_hours=8)
+    msg = str(rec[0].message)
+    assert "6.0 mm" in msg                    # strongest dropped
+    assert "max_wet_hours" in msg             # and how to fix it
+
+
+def test_the_cap_drops_the_weakest_hour_not_the_last(monkeypatch):
+    """It ranks by intensity: 04Z (6.0 mm) goes, even though 03Z (8.4) is later."""
+    with pytest.warns(UserWarning):
+        wet, _ = _find_wet_over(monkeypatch, _AUG13, _AUG13_WINDOW,
+                                max_wet_hours=8)
+    kept = list(wet.t)
+    assert dt.datetime(2026, 8, 14, 4) not in kept
+    assert dt.datetime(2026, 8, 14, 3) in kept
+
+
+def test_truncation_shortens_the_stacked_span(monkeypatch):
+    """The real damage: the run ends an hour early, so `total` loses that rain."""
+    with pytest.warns(UserWarning):
+        wet8, _ = _find_wet_over(monkeypatch, _AUG13, _AUG13_WINDOW,
+                                 max_wet_hours=8)
+    wet12, _ = _find_wet_over(monkeypatch, _AUG13, _AUG13_WINDOW,
+                              max_wet_hours=12)
+    assert mrms.contiguous_runs(list(wet8.t))[0][-1] == dt.datetime(2026, 8, 14, 3)
+    assert mrms.contiguous_runs(list(wet12.t))[0][-1] == dt.datetime(2026, 8, 14, 4)
+
+
+def test_find_wet_hours_is_quiet_when_the_cap_is_not_reached(monkeypatch):
+    """A 4-wet-hour storm (14 Aug) under the default cap must not warn."""
+    q = {dt.datetime(2026, 8, 14, 23): 11.9,
+         dt.datetime(2026, 8, 15, 0): 32.9,
+         dt.datetime(2026, 8, 15, 1): 34.8,
+         dt.datetime(2026, 8, 15, 2): 3.4}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")        # any warning fails the test
+        wet, _ = _find_wet_over(monkeypatch, q,
+                                (dt.datetime(2026, 8, 14, 20),
+                                 dt.datetime(2026, 8, 15, 3)))
+    assert len(wet) == 4
+
+
+def test_the_all_dry_fallback_never_warns(monkeypatch):
+    """A dry span falls back to the single best hour — one row, never truncation."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        wet, _ = _find_wet_over(monkeypatch, {},
+                                (dt.datetime(2026, 8, 11, 0),
+                                 dt.datetime(2026, 8, 11, 6)),
+                                max_wet_hours=1)
+    assert len(wet) == 1
