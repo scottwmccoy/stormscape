@@ -683,7 +683,10 @@ Products are sorted by kind inside `--out-dir`:
 
 **Reading is layout-agnostic.** Every `--from-dir` / `--radar-dir` resolves the
 sorted subdirectory first and falls back to the flat path, so event folders
-written by earlier versions keep working with no migration.
+written by earlier versions keep working with no migration. Pointing
+`--from-dir` at `<event>/rasters` works too — a layout subdirectory resolves
+against the event root, so the AOI in `vectors/` and `RainGaugeData/` are still
+found.
 
 Pass `--flat` (or set `STORMSCAPE_LAYOUT=flat`) to write everything straight
 into `--out-dir`, as before.

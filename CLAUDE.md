@@ -856,6 +856,16 @@ in `README.md`.
   both read layouts, precedence, the env var, and a write→find round trip;
   `tests/test_export.py` now asserts on `export_geotiffs`' **returned** paths
   rather than hand-built ones.
+- **`find()` climbs out of a layout subdirectory (2026-08-15).** Pointing
+  `--from-dir` at `<event>/rasters` is the natural mistake — it is where the
+  GeoTIFFs are — but the event AOI is in `<event>/vectors` and `RainGaugeData/`
+  at the root, so the lookup missed them and `climate` silently degraded to
+  framing on the i15 footprint instead of the event AOI. `layout._candidates`
+  now appends the parent's sorted+flat pair when `basename(in_dir)` is in
+  `RESERVED`, so `--from-dir <event>/rasters` behaves exactly like
+  `--from-dir <event>`. Climbing is **only ever a fallback**: a local hit still
+  wins, and an ordinary directory that merely happens to be named `rasters`
+  gains nothing it would not otherwise find.
 - **Testing (`tests/`, pytest, added 2026-07-29) — run it before every push.**
   `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **232 tests,
   ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14 request, no

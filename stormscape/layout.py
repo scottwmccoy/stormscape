@@ -83,17 +83,44 @@ def out_path(out_dir: str, filename: str, layout=None, make=True) -> str:
     return os.path.join(d, os.path.basename(filename))
 
 
+def _candidates(in_dir: str, base: str):
+    """Where ``base`` might live, best first, given ``in_dir``.
+
+    Also searches the *parent* when ``in_dir`` is itself one of the sorted
+    subdirectories. Pointing ``--from-dir`` at ``<event>/rasters`` is a natural
+    thing to do -- it is where the GeoTIFFs are -- but the event AOI lives in
+    ``<event>/vectors`` and the gauge store beside it, so a lookup anchored at
+    ``rasters/`` would miss them and silently degrade (the climate figures fall
+    back to the i15 footprint instead of the event AOI). Treating a layout
+    subdirectory as "inside the event" makes that call behave exactly like
+    passing the event root.
+
+    A directory that merely happens to be named ``rasters`` only ever gains a
+    fallback: local hits still win.
+    """
+    sub = subdir_for(base)
+    out = []
+    if sub:
+        out.append(os.path.join(in_dir, sub, base))
+    out.append(os.path.join(in_dir, base))
+    if os.path.basename(os.path.normpath(in_dir)) in RESERVED:
+        parent = os.path.dirname(os.path.normpath(in_dir))
+        if sub:
+            out.append(os.path.join(parent, sub, base))
+        out.append(os.path.join(parent, base))
+    return out
+
+
 def find(in_dir: str, filename: str) -> str:
     """Path to read ``filename`` from ``in_dir``, sorted layout or flat.
 
-    Prefers the sorted subdirectory, falls back to the flat path. When neither
-    exists the *sorted* path is returned, so a "file not found" message points
-    at where a fresh run would have put it.
+    Prefers the sorted subdirectory, falls back to the flat path, then to the
+    same pair on the parent when ``in_dir`` is a layout subdirectory (see
+    :func:`_candidates`). When nothing exists the *sorted* path under ``in_dir``
+    is returned, so a "file not found" message points at where a fresh run would
+    have put it.
     """
-    base = os.path.basename(filename)
-    sub = subdir_for(base)
-    cand = [os.path.join(in_dir, sub, base)] if sub else []
-    cand.append(os.path.join(in_dir, base))
+    cand = _candidates(in_dir, os.path.basename(filename))
     for p in cand:
         if os.path.exists(p):
             return p
@@ -116,8 +143,17 @@ def subdir(out_dir: str, name: str, layout=None, make=True) -> str:
 
 
 def find_subdir(in_dir: str, name: str) -> str:
-    """Locate a product directory written by either layout (see :func:`find`)."""
-    for p in (os.path.join(in_dir, "figures", name), os.path.join(in_dir, name)):
+    """Locate a product directory written by either layout (see :func:`find`).
+
+    Climbs to the parent on a layout subdirectory for the same reason
+    :func:`find` does -- ``--from-dir <event>/rasters`` must still find
+    ``RainGaugeData/`` at the event root.
+    """
+    cand = [os.path.join(in_dir, "figures", name), os.path.join(in_dir, name)]
+    if os.path.basename(os.path.normpath(in_dir)) in RESERVED:
+        parent = os.path.dirname(os.path.normpath(in_dir))
+        cand += [os.path.join(parent, "figures", name), os.path.join(parent, name)]
+    for p in cand:
         if os.path.isdir(p):
             return p
-    return os.path.join(in_dir, name)
+    return cand[1]

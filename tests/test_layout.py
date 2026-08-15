@@ -157,3 +157,51 @@ def test_cli_default_output_names_route_into_subdirs(tmp_path, name, sub):
     dropping figures next to the GeoTIFFs. Caught on a live run, not by a test —
     the commands that write them are network-bound and are not exercised here."""
     assert layout.out_path(str(tmp_path), name) == str(tmp_path / sub / name)
+
+
+# --------------------------------------------------------------------------- #
+# pointing --from-dir at a layout subdirectory still resolves the whole event
+# --------------------------------------------------------------------------- #
+def _event(tmp_path):
+    """A sorted event folder: a raster, the AOI, and a gauge store."""
+    for sub, name in [("rasters", "ev_i15max.tif"), ("vectors", "ev_aoi.geojson"),
+                      ("vectors", "ev_gauges.geojson")]:
+        (tmp_path / sub).mkdir(exist_ok=True)
+        (tmp_path / sub / name).write_text("x")
+    (tmp_path / "RainGaugeData").mkdir()
+    return tmp_path
+
+
+def test_from_dir_at_rasters_still_finds_the_event_aoi(tmp_path):
+    """`--from-dir <event>/rasters` is a natural thing to type -- it is where
+    the GeoTIFFs are -- but the AOI and gauge store live in vectors/. Anchoring
+    there used to miss them, and the climate figures silently fell back to the
+    i15 footprint instead of the event AOI."""
+    ev = _event(tmp_path)
+    for name in ("ev_i15max.tif", "ev_aoi.geojson", "ev_gauges.geojson"):
+        got = layout.find(str(ev / "rasters"), name)
+        assert os.path.exists(got), f"{name} not found from rasters/"
+
+
+def test_from_dir_at_rasters_still_finds_raingaugedata(tmp_path):
+    ev = _event(tmp_path)
+    assert layout.find_subdir(str(ev / "rasters"), "RainGaugeData") == \
+        str(ev / "RainGaugeData")
+
+
+def test_a_local_hit_still_beats_the_parent(tmp_path):
+    """Climbing is only ever a fallback -- a file in the given directory wins."""
+    ev = _event(tmp_path)
+    (ev / "rasters" / "ev_aoi.geojson").write_text("local")
+    assert layout.find(str(ev / "rasters"), "ev_aoi.geojson") == \
+        str(ev / "rasters" / "ev_aoi.geojson")
+
+
+def test_climbing_only_happens_from_a_layout_subdirectory(tmp_path):
+    """An ordinary directory must not start reading its parent."""
+    (tmp_path / "vectors").mkdir()
+    (tmp_path / "vectors" / "ev_aoi.geojson").write_text("x")
+    plain = tmp_path / "scratch"
+    plain.mkdir()
+    got = layout.find(str(plain), "ev_aoi.geojson")
+    assert not os.path.exists(got)
