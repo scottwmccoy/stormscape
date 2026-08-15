@@ -120,8 +120,8 @@ def _cmd_i15(args):
 
 def _cmd_map(args):
     from .plot import drape_i15
-    out = args.out or os.path.join(args.out_dir or ".",
-                                   (args.key or "i15_map") + ".png")
+    out = args.out or out_path(args.out_dir or ".",
+                               (args.key or "i15_map") + ".png")
     drape_i15(args.hillshade, args.i15, out_path=out, work_crs="UTM",
               cmap=args.cmap, wet_min=args.wet_min, perimeters=args.perimeters,
               basins=args.basins, highlight=args.highlight, points=args.points,
@@ -368,7 +368,7 @@ def _cmd_compare(args):
     table, stats = compare_storm(gauges, radar_dir, key, rqi_min=args.rqi_min,
                                  max_report_min=args.max_report_min,
                                  multisensor=args.multisensor)
-    out_csv = args.out or os.path.join(args.out_dir or ".", f"{key}_compare.csv")
+    out_csv = args.out or out_path(args.out_dir or ".", f"{key}_compare.csv")
     os.makedirs(os.path.dirname(os.path.abspath(out_csv)), exist_ok=True)
     table.drop(columns="geometry").to_csv(out_csv, index=False)
     print(stats.to_string(index=False))
@@ -390,7 +390,7 @@ def _cmd_compare(args):
 
 def _cmd_panels(args):
     from .plot import diagnostic_panels
-    out = args.out or os.path.join(args.radar_dir or ".", f"{args.key}_panels.png")
+    out = args.out or out_path(args.radar_dir or ".", f"{args.key}_panels.png")
     diagnostic_panels(args.radar_dir or ".", args.key, which=args.fields,
                       out_path=out, hillshade=args.hillshade,
                       perimeters=args.perimeters, gauges=args.gauges,
@@ -1138,8 +1138,8 @@ def _cmd_export(args):
             print("note: no AOI for --streams (pass --aoi/--bbox, or place "
                   f"{from_key}_aoi.geojson in --from-dir); skipping streams")
         else:
-            out_s = os.path.join(args.out_dir,
-                                 f"{key}_streams.{args.streams_format}")
+            out_s = out_path(args.out_dir,
+                             f"{key}_streams.{args.streams_format}")
             if _export.export_streams(aoi_spec, out_s,
                                       named_only=args.streams_named_only,
                                       clip_to_aoi=not args.streams_bbox):

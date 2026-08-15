@@ -141,3 +141,19 @@ def test_write_then_find_round_trips_in_either_layout(tmp_path, lay):
         p = layout.out_path(str(tmp_path), name, layout=lay)
         open(p, "w").write("x")
         assert layout.find(str(tmp_path), name) == p
+
+
+# --------------------------------------------------------------------------- #
+# CLI default output paths must honour the layout too
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("name, sub", [
+    ("ev_panels.png", "figures"),      # panels: default was <radar-dir>/<key>_panels.png
+    ("ev.png", "figures"),             # map:    default was <out-dir>/<key>.png
+    ("ev_compare.csv", "tables"),      # compare
+    ("ev_streams.geojson", "vectors"), # export --streams
+])
+def test_cli_default_output_names_route_into_subdirs(tmp_path, name, sub):
+    """These four defaults were built with os.path.join and bypassed the sort,
+    dropping figures next to the GeoTIFFs. Caught on a live run, not by a test —
+    the commands that write them are network-bound and are not exercised here."""
+    assert layout.out_path(str(tmp_path), name) == str(tmp_path / sub / name)
