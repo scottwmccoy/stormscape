@@ -100,11 +100,17 @@ def _cmd_dem(args):
 def _cmd_i15(args):
     from .mrms import i15_storm_day, save_fields
     os.makedirs(args.out_dir, exist_ok=True)
-    key = args.key or f"i15_{str(args.date).replace('-', '')}"
+    key = args.key or f"i15_{_event_label(args)}"
     _save_event_aoi(args, args.out_dir, key)        # for climate auto-extent-match
+    # --start/--end scope the RADAR STACK too, not just the gauges. A --date
+    # window spans ~30 h so the local day is covered, which silently merges
+    # back-to-back evening storms: on 2026-08-14 the 04Z hour was the tail of
+    # the 13 Aug storm and landed in "today's" peak maps.
+    window = _stack_window(args)
     res = i15_storm_day(_aoi_from_args(args), args.date, pad_deg=args.pad_deg,
                         qpe_thresh=args.qpe_thresh,
-                        max_wet_hours=args.max_wet_hours, workers=args.workers)
+                        max_wet_hours=args.max_wet_hours, workers=args.workers,
+                        window=window)
     paths = save_fields(res, args.out_dir, key)
     print(json.dumps(res["meta"], indent=2))
     for p in paths:
@@ -112,7 +118,8 @@ def _cmd_i15(args):
     if getattr(args, "multisensor", False):
         from .mrms import multisensor_total
         ms = multisensor_total(_aoi_from_args(args), args.date,
-                               pad_deg=args.pad_deg, workers=args.workers)
+                               pad_deg=args.pad_deg, workers=args.workers,
+                               window=window)
         for p in save_fields(ms, args.out_dir, key):
             print(f"wrote {p}")
     return out_path(args.out_dir, f"{key}_i15max.tif")
@@ -146,7 +153,7 @@ def _cmd_run(args):
     key = args.key or "run"
     _save_event_aoi(args, args.out_dir, key)        # for climate auto-extent-match
     out = out_path(args.out_dir, f"{key}.png")
-    title = args.title or f"{key}  -  i15 over terrain  ({args.date})"
+    title = args.title or f"{key}  -  i15 over terrain  ({_event_label(args)})"
     clip = (args.perimeters or args.aoi) if args.clip else None
 
     # optional rain gauges (--gauges) and radar-vs-gauge comparison (--compare,
@@ -200,7 +207,7 @@ def _cmd_run(args):
                   alpha=args.alpha, north_arrow=True, scale_ticks=True,
                   legend="gauges",
                   clip=clip, clip_margin=args.clip_margin, dpi=args.dpi,
-                  title=f"{key}  -  radar - gauge  i15  ({args.date})")
+                  title=f"{key}  -  radar - gauge  i15  ({_event_label(args)})")
         print(f"wrote {cmp_png}")
 
 
@@ -220,6 +227,31 @@ def _gauge_window(args):
     end = (dt.datetime(d.year, d.month, d.day)
            + dt.timedelta(days=1, hours=SCAN_PAD_H[1]))
     return start, end
+
+
+def _event_label(args):
+    """``YYYYMMDD`` for keys/titles, from --date or from the window start."""
+    if getattr(args, "date", None):
+        return str(args.date).replace("-", "")
+    win = _stack_window(args)
+    return f"{win[0]:%Y%m%d}" if win else "event"
+
+
+def _stack_window(args):
+    """``(start, end)`` for the MRMS stack when the user pinned one, else None.
+
+    Deliberately the SAME ``--start``/``--end`` the gauge side uses: having one
+    pair of flags mean "the analysis window" everywhere is less surprising than
+    having them scope the gauges while the radar quietly stacks a whole day.
+    """
+    import datetime as dt
+
+    if not (getattr(args, "start", None) and getattr(args, "end", None)):
+        if not getattr(args, "date", None):
+            sys.exit("error: provide --date YYYYMMDD, or both --start and --end")
+        return None
+    f = "%Y%m%d%H%M"
+    return (dt.datetime.strptime(args.start, f), dt.datetime.strptime(args.end, f))
 
 
 def _explicit_window(args):
@@ -1481,6 +1513,17 @@ def _cmd_smooth(args):
               f"r={args.write_radius:g}km) to {args.out_dir}/")
 
 
+def _add_window_opts(p):
+    """``--start``/``--end``: the analysis window, for commands without gauge
+    options. Where a command has both, these are the *same* flags -- one pair
+    meaning "the analysis window" for the radar stack and the gauges alike.
+    """
+    p.add_argument("--start", help="UTC window start YYYYMMDDHHMM (with --end, "
+                                   "overrides --date; use when a storm does not "
+                                   "line up with a local day)")
+    p.add_argument("--end", help="UTC window end YYYYMMDDHHMM")
+
+
 def _add_gauge_opts(p):
     p.add_argument("--token", help="Synoptic API token (else $SYNOPTIC_TOKEN)")
     p.add_argument("--durations", type=int, nargs="+", default=[15, 30, 60],
@@ -1671,10 +1714,12 @@ def main(argv=None):
 
     pi = sub.add_parser("i15", help="stack MRMS into a peak-i15 field")
     _add_aoi(pi)
-    pi.add_argument("--date", required=True, help="storm-day YYYYMMDD")
+    pi.add_argument("--date", help="storm-day YYYYMMDD (scans [04Z, next-day "
+                                   "10Z]); optional if --start/--end are given")
     pi.add_argument("--qpe-thresh", type=float, default=2.5)
     pi.add_argument("--max-wet-hours", type=int, default=8)
     pi.add_argument("--workers", type=int, default=12)
+    _add_window_opts(pi)
     pi.add_argument("--multisensor", action="store_true",
                     help="also fetch gauge-corrected MultiSensor QPE total "
                          "-> <key>_mstotal.tif")
@@ -1693,7 +1738,8 @@ def main(argv=None):
 
     pr = sub.add_parser("run", help="DEM -> hillshade -> i15 -> figure")
     _add_aoi(pr)
-    pr.add_argument("--date", required=True, help="storm-day YYYYMMDD")
+    pr.add_argument("--date", help="storm-day YYYYMMDD (scans [04Z, next-day "
+                                   "10Z]); optional if --start/--end are given")
     pr.add_argument("--resolution", type=int, default=10)
     pr.add_argument("--clip-dem", action="store_true",
                     help="mask DEM outside the AOI polygon")

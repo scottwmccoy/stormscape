@@ -668,6 +668,20 @@ cliff edges and hillshading turns the overshoot into bright rims; `nearest`
 aliases the 1/3-arc-second VRT into a ~45° hatch and is offered only so that
 artefact stays reproducible.
 
+### Analysis window
+
+`--date YYYYMMDD` scans `[04Z, next-day 10Z]`, which covers the local day.
+When a storm does not line up with a local day — most often two storms on
+consecutive evenings, where the previous evening's tail falls inside today's
+span — give `--start`/`--end` instead (or as well; the window wins):
+
+```bash
+python -m stormscape i15 --aoi fire.geojson --start 202608142000 --end 202608150400
+```
+
+These are the same `--start`/`--end` the gauge side uses: one pair of flags
+scopes the radar stack and the gauges alike.
+
 ## Output layout
 
 Products are sorted by kind inside `--out-dir`:

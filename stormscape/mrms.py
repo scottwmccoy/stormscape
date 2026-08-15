@@ -166,12 +166,29 @@ def compute_i15(stack):
     return (i16 + i14) / 2
 
 
-def find_wet_hours(date0, win, qpe_thresh=QPE_THRESH, max_wet_hours=MAX_WET_HRS,
-                   scan_pad_h=SCAN_PAD_H, workers=WORKERS):
-    """Scan hourly QPE; return (wet-hour DataFrame, full scan DataFrame)."""
+def window_hours(date0=None, scan_pad_h=SCAN_PAD_H, window=None):
+    """The hourly stamps to scan: an explicit ``window`` or a storm-day span.
+
+    ``window`` is ``(start, end)`` UTC datetimes and wins when given; otherwise
+    the span is ``[date0 scan_pad_h[0]Z, next-day scan_pad_h[1]Z]``, which
+    covers the local calendar day.
+    """
+    if window is not None:
+        start, end = window
+        start = start.replace(minute=0, second=0, microsecond=0)
+        n = int((end - start).total_seconds() // 3600) + 1
+        return [start + dt.timedelta(hours=h) for h in range(max(n, 1))]
+    if date0 is None:
+        raise ValueError("need a date or an explicit window")
     start = dt.datetime(date0.year, date0.month, date0.day, scan_pad_h[0])
-    hours = [start + dt.timedelta(hours=h)
-             for h in range(24 + scan_pad_h[1] - scan_pad_h[0])]
+    return [start + dt.timedelta(hours=h)
+            for h in range(24 + scan_pad_h[1] - scan_pad_h[0])]
+
+
+def find_wet_hours(date0, win, qpe_thresh=QPE_THRESH, max_wet_hours=MAX_WET_HRS,
+                   scan_pad_h=SCAN_PAD_H, workers=WORKERS, window=None):
+    """Scan hourly QPE; return (wet-hour DataFrame, full scan DataFrame)."""
+    hours = window_hours(date0, scan_pad_h, window)
     arrs = fetch_many("RadarOnly", hours, win, workers=workers)
     rec = pd.DataFrame(
         [(t, float(np.nanmax(arrs[t])) if t in arrs
@@ -233,9 +250,9 @@ def wet_window(aoi, start, end, pad_deg=0.05, qpe_thresh=QPE_THRESH,
             min(max(wet) + pad, end))
 
 
-def i15_storm_day(aoi, date, pad_deg=0.05, qpe_thresh=QPE_THRESH,
+def i15_storm_day(aoi, date=None, pad_deg=0.05, qpe_thresh=QPE_THRESH,
                   max_wet_hours=MAX_WET_HRS, scan_pad_h=SCAN_PAD_H,
-                  workers=WORKERS, verbose=True):
+                  workers=WORKERS, verbose=True, window=None):
     """Build the peak-i15 field (and companions) for one storm-day over an AOI.
 
     Parameters
@@ -244,7 +261,13 @@ def i15_storm_day(aoi, date, pad_deg=0.05, qpe_thresh=QPE_THRESH,
         Anything :func:`stormscape.aoi.load_aoi` accepts.
     date
         Storm-day (local calendar day): date/datetime, 'YYYYMMDD', or
-        'YYYY-MM-DD'.
+        'YYYY-MM-DD'. Optional when ``window`` is given.
+    window
+        Explicit ``(start, end)`` UTC datetimes to scan and stack, overriding
+        ``date``/``scan_pad_h``. Use it when the storm does not line up with a
+        local day -- back-to-back evening storms otherwise share the ~30 h
+        storm-day span, and the previous evening's tail gets stacked into
+        today's peak-intensity maps.
     pad_deg
         Degrees to pad the AOI bounds before windowing the MRMS grid.
 
@@ -259,14 +282,16 @@ def i15_storm_day(aoi, date, pad_deg=0.05, qpe_thresh=QPE_THRESH,
         count, AOI-max i15, median RQI).
     """
     bounds, _ = load_aoi(aoi, pad_deg=pad_deg)
-    date0 = parse_date(date)
+    if date is None and window is None:
+        raise ValueError("i15_storm_day needs a date or an explicit window")
+    date0 = parse_date(date) if date is not None else window[0].date()
     win, tr = aoi_window(bounds)
     shape = (int(win.height), int(win.width))
     if shape[0] <= 0 or shape[1] <= 0:
         raise ValueError(f"AOI {bounds} is empty or outside the CONUS grid.")
 
     wet, scout = find_wet_hours(date0, win, qpe_thresh, max_wet_hours,
-                                scan_pad_h, workers)
+                                scan_pad_h, workers, window=window)
     peak_t = scout.loc[scout.qmax.idxmax(), "t"]
     if verbose:
         print(f"  {date0}: peak {peak_t:%m-%d %H}Z "
@@ -333,8 +358,8 @@ def i15_storm_day(aoi, date, pad_deg=0.05, qpe_thresh=QPE_THRESH,
                 profile=profile, meta=meta)
 
 
-def multisensor_total(aoi, date, pad_deg=0.05, scan_pad_h=SCAN_PAD_H,
-                      pass2=True, workers=WORKERS, verbose=True):
+def multisensor_total(aoi, date=None, pad_deg=0.05, scan_pad_h=SCAN_PAD_H,
+                      pass2=True, workers=WORKERS, verbose=True, window=None):
     """Gauge-corrected storm total from MRMS MultiSensor QPE (hourly).
 
     Sums MRMS ``MultiSensor_QPE_01H`` (Pass-2 by default -- the final,
@@ -348,14 +373,14 @@ def multisensor_total(aoi, date, pad_deg=0.05, scan_pad_h=SCAN_PAD_H,
     single key ``mstotal``), so :func:`save_fields` writes ``<key>_mstotal.tif``.
     """
     bounds, _ = load_aoi(aoi, pad_deg=pad_deg)
-    date0 = parse_date(date)
+    if date is None and window is None:
+        raise ValueError("multisensor_total needs a date or an explicit window")
+    date0 = parse_date(date) if date is not None else window[0].date()
     win, tr = aoi_window(bounds)
     shape = (int(win.height), int(win.width))
     if shape[0] <= 0 or shape[1] <= 0:
         raise ValueError(f"AOI {bounds} is empty or outside the CONUS grid.")
-    start = dt.datetime(date0.year, date0.month, date0.day, scan_pad_h[0])
-    hours = [start + dt.timedelta(hours=h)
-             for h in range(24 + scan_pad_h[1] - scan_pad_h[0])]
+    hours = window_hours(date0, scan_pad_h, window)
     product = "MultiSensor" if pass2 else "MultiSensor1"
     arrs = fetch_many(product, hours, win, workers=workers)
     total = np.zeros(shape, np.float32)

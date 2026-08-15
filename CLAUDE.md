@@ -856,6 +856,24 @@ in `README.md`.
   both read layouts, precedence, the env var, and a write→find round trip;
   `tests/test_export.py` now asserts on `export_geotiffs`' **returned** paths
   rather than hand-built ones.
+- **Explicit analysis window for the stack (2026-08-15) — `--start`/`--end` on
+  `i15`/`run`, `mrms.window_hours`.** `--date` scans a fixed ~30 h span
+  (`SCAN_PAD_H = (4, 10)`, [day 04Z, next-day 10Z]) so the local day is covered.
+  Back-to-back evening storms therefore **share** a storm-day window: on
+  2026-08-14 the 04Z hour was the *tail of the 13 Aug storm* (6.0 mm areal max)
+  and was stacked into "today's" peak-intensity maps. Verified against the real
+  AOI — `--date` selects `[04Z, 23Z, 00Z, 01Z]`, the window selects
+  `[23Z, 00Z, 01Z]`.
+  `mrms.window_hours(date0, scan_pad_h, window)` centralises the choice;
+  `i15_storm_day` and `multisensor_total` take `window=(start, end)` and make
+  `date` optional. **`--start`/`--end` now scope the RADAR STACK, not just the
+  gauges** — they previously existed on `run` (via `_add_gauge_opts`) and scoped
+  only the gauge fetch while the radar quietly stacked the whole day, which is a
+  trap; one pair of flags now means "the analysis window" everywhere. `i15` had
+  no window flags at all and gets them via the new `_add_window_opts`. `--date`
+  is no longer `required` on `i15`/`run` — give a date, a window, or both (the
+  window wins); giving neither is rejected in `_stack_window`. `_event_label`
+  supplies the `YYYYMMDD` for keys and titles from whichever was given.
 - **`find()` climbs out of a layout subdirectory (2026-08-15).** Pointing
   `--from-dir` at `<event>/rasters` is the natural mistake — it is where the
   GeoTIFFs are — but the event AOI is in `<event>/vectors` and `RainGaugeData/`

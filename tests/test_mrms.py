@@ -182,3 +182,38 @@ def test_wet_window_honours_the_qpe_threshold(monkeypatch):
     wet = [dt.datetime(2026, 8, 12, 6)]
     assert _wet_window_over(monkeypatch, wet, start, end, qpe_thresh=50.0) is None
     assert _wet_window_over(monkeypatch, wet, start, end, qpe_thresh=5.0) is not None
+
+
+# --------------------------------------------------------------------------- #
+# window_hours — an explicit analysis window, or the storm-day span
+# --------------------------------------------------------------------------- #
+def test_storm_day_span_covers_the_local_day():
+    hours = mrms.window_hours(dt.date(2026, 8, 14))
+    assert len(hours) == 30                       # [04Z, next-day 10Z]
+    assert hours[0] == dt.datetime(2026, 8, 14, 4)
+    assert hours[-1] == dt.datetime(2026, 8, 15, 9)
+
+
+def test_explicit_window_is_used_verbatim():
+    w = (dt.datetime(2026, 8, 14, 20), dt.datetime(2026, 8, 15, 4))
+    hours = mrms.window_hours(window=w)
+    assert hours[0] == w[0] and hours[-1] == w[1]
+    assert len(hours) == 9
+
+
+def test_explicit_window_overrides_the_date():
+    """Back-to-back evening storms share a storm-day span; the window is how a
+    run says "only tonight's cells, not last night's tail"."""
+    w = (dt.datetime(2026, 8, 14, 20), dt.datetime(2026, 8, 15, 4))
+    assert mrms.window_hours(dt.date(2026, 1, 1), window=w)[0] == w[0]
+
+
+def test_window_start_is_floored_to_the_hour():
+    hours = mrms.window_hours(window=(dt.datetime(2026, 8, 14, 20, 37),
+                                      dt.datetime(2026, 8, 14, 23)))
+    assert hours[0] == dt.datetime(2026, 8, 14, 20)
+
+
+def test_a_date_or_a_window_is_required():
+    with pytest.raises(ValueError):
+        mrms.window_hours()

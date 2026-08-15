@@ -175,3 +175,49 @@ def test_resampling_offers_nearest_so_the_artefact_stays_reproducible(capsys):
     with pytest.raises(SystemExit):
         cli.main(["dem", "--help"])
     assert "nearest" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------- #
+# --start/--end scope the radar stack, not only the gauges
+# --------------------------------------------------------------------------- #
+class _Args:
+    def __init__(self, **kw):
+        self.date = self.start = self.end = None
+        self.__dict__.update(kw)
+
+
+def test_date_alone_means_the_storm_day_scan():
+    assert cli._stack_window(_Args(date="20260814")) is None
+
+
+def test_start_end_alone_is_accepted_and_used():
+    w = cli._stack_window(_Args(start="202608142000", end="202608150400"))
+    assert (w[0].hour, w[1].hour) == (20, 4)
+
+
+def test_start_end_override_date_for_the_stack():
+    """One pair of flags means "the analysis window" everywhere. They used to
+    scope the gauges while the radar quietly stacked the whole day."""
+    w = cli._stack_window(_Args(date="20260101", start="202608142000",
+                                end="202608150400"))
+    assert w[0].strftime("%Y%m%d") == "20260814"
+
+
+def test_neither_date_nor_window_is_rejected():
+    with pytest.raises(SystemExit):
+        cli._stack_window(_Args())
+
+
+def test_event_label_falls_back_to_the_window_start():
+    assert cli._event_label(_Args(start="202608142000",
+                                  end="202608150400")) == "20260814"
+
+
+@pytest.mark.parametrize("cmd", ["i15", "run"])
+def test_date_is_no_longer_mandatory(cmd, capsys):
+    """--date must be optional so a window alone works; the parser should not
+    reject it before _stack_window can validate the combination."""
+    with pytest.raises(SystemExit):
+        cli.main([cmd, "--help"])
+    out = capsys.readouterr().out
+    assert "--date" in out and "optional if --start/--end" in out
