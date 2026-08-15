@@ -21,7 +21,9 @@ vector file, or a shapely geometry) plus a **storm-day date** into:
 6. **abandoned mine features** — USGS **USMIN** topo mine symbols (dumps,
    tailings, adits, shafts) over the AOI, grouped, filterable and mappable as
    points or a per-km2 density surface (`stormscape/mines.py`);
-7. raw **single-radar NEXRAD Level II** tilts (reflectivity/velocity) for the
+7. **USGS stream gauges** — discharge + stage hydrographs for the AOI, on the
+   map and against the rain that produced them (`stormscape/streamflow.py`);
+8. raw **single-radar NEXRAD Level II** tilts (reflectivity/velocity) for the
    radar nearest the AOI — gridded over the AOI or sampled at the gauges, with a
    Z–R diagnostic (`stormscape/nexrad.py`); the underlying radar behind the MRMS
    mosaic, and the way to reach pre-2020 events.
@@ -100,10 +102,11 @@ in `README.md`.
 - `stormscape/export.py` — georeferenced exports for GIS/CalTopo: EPSG:3857 GeoTIFFs (raw float + colorized RGBA) + GeoPDF figures
 - `stormscape/burn.py` — near-real-time burn severity (BRISK dNBR / BAER SBS)
 - `stormscape/mines.py` — abandoned mine features (USGS USMIN) + density
+- `stormscape/streamflow.py` — USGS stream gauges (discharge + stage)
 - `stormscape/refdata.py` — AOI-scoped NHD streams / TIGER roads / GNIS places
 - `stormscape/plot.py` — drape i15 over hillshade + basemap/vector/gauge overlays
 - `stormscape/data/` — bundled tables (`nexrad_sites.csv` NCEI HOMR, `atlas14_regions.csv`)
-- `stormscape/cli.py` — `stormscape {dem,i15,map,run,gauges,compare,nexrad,panels,vgauge,zoom,pick,climate,smooth,recurrence,export,burn,mines}`
+- `stormscape/cli.py` — `stormscape {dem,i15,map,run,gauges,compare,nexrad,panels,vgauge,zoom,pick,climate,smooth,recurrence,export,burn,mines,flow}`
 - `environment.yml`, `pyproject.toml`, `examples/`
 
 ## Conventions & gotchas (learned during development)
@@ -1179,9 +1182,79 @@ in `README.md`.
   **No new deps.** Tests: `tests/test_mines.py` (75, offline — `requests.get`
   replaced by a replaying double).
 
+- **USGS stream gauges (`streamflow.py`, CLI `flow`, 2026-08-15).** The
+  channel-side counterpart to `gauges.py`: what came *down the channel*, against
+  the rain that produced it. For post-fire work the pairing is the point — a
+  burned catchment converts rain to runoff at a rate an unburned one does not.
+  **TWO SOURCES, ONE INTERFACE, BECAUSE USGS IS MID-MIGRATION.** `SOURCES`
+  carries both: **`nwis`** (default) = legacy `waterservices.usgs.gov`, no key,
+  **announced for decommission with an explicitly uncertain timeline**; **`ogc`**
+  = the modernized `api.waterdata.usgs.gov/ogcapi/v0`, which works **anonymously
+  at 100 req/hour per IP** (ample: one site query + a few series per AOI; a free
+  key raises it to 1,000 via `$STORMSCAPE_USGS_API_KEY`). Legacy stays the
+  default only because the replacement is still on a **`/v0/` path** — but `ogc`
+  is fully implemented and tested, not a stub. **Validated equivalence:** both
+  return **the same 20 gauges** over the HV AOI and **byte-identical values**
+  (max |nwis−ogc| = 0.000000 cfs over 289 stamps on 10348000), so `--source ogc`
+  is a true drop-in the day legacy dies.
+  **Getting the two sources to agree took real work.** `monitoring-locations`
+  answers "is this a stream site", NOT "does it measure discharge every 15 min",
+  so filtering on it gave **120 sites vs NWIS's 20**. Fix: query
+  **`time-series-metadata`** with `parameter_code=00060` +
+  **`computation_period_identifier="Points"`** (the OGC name for instantaneous
+  values), which also carries `begin`/`end` — and the 5 remaining extras were
+  **discontinued records** (ended 1994–2017 vs 2026-08-15 for the live ones), so
+  `ACTIVE_WITHIN_DAYS = 365` on `end` reproduces NWIS's `siteStatus=active`.
+  **API gotchas, all measured:** (a) `outputDataTypeCd` together with
+  `siteOutput=expanded` is an **HTTP 400** — `hasDataTypeCd=iv` makes the former
+  redundant anyway; (b) the NWIS **site** service is genuinely slow over a bbox
+  (**30–45 s**, vs sub-second for the OGC equivalent) so it gets its own
+  `SITE_TIMEOUT = 180`, while the value endpoints are quick; (c) NWIS stamps the
+  **gauge's local time WITH an offset** (`...T17:00:00.000-07:00`), not UTC —
+  normalised on arrival or a Pacific hydrograph lands 7 h from the radar that
+  caused it; (d) missing values are the sentinel **−999999**, not null; (e) the
+  site service returns **one row per available time series**, so a gauge with
+  discharge+stage+temperature appears three times (dedupe on `site_no`).
+  **Units: both, always.** `discharge_cms`/`discharge_cfs` +
+  `stage_m`/`stage_ft` in every frame, because USGS publishes ft³/s and ft while
+  the rest of stormscape is metric. Summaries/figures default to **SI** to match
+  the rainfall side; `--units cfs` reads them the USGS way. Conversions exact
+  (`CFS_TO_CMS = 0.028316846592`, `FT_TO_M = 0.3048`).
+  **`peak_at_edge` — the truncation warning.** A gauge whose peak lands on its
+  **last observation** was still rising when the window ended, so the peak and
+  everything derived from it read low. Found by *looking at a figure* (Steamboat
+  Ck at Cleanwater, 13 Aug, still climbing at 00:00); the summary now carries the
+  flag and the CLI names the gauges. Same lesson as `max_wet_hours`: warn, never
+  let a truncated storm pass as a complete one.
+  **Figures:** `plot.hydrograph` (discharge left axis, stage right, peak marked;
+  optional **inverted hyetograph** panel above from a rain-gauge or virtual-gauge
+  series — the lag between cell and peak is the signal), `plot.hydrograph_atlas`
+  (one panel per gauge, **shared time axis** so gauges can be compared for
+  *timing*, but **independent y-scales** because discharge across an AOI spans
+  five orders of magnitude; sorted by peak, `min_peak` drops irrigation drains),
+  and `plot.add_stream_gauges` (blue **squares** — deliberately unlike the rain
+  gauges' yellow circles, since a map can carry both). `drape_i15` gained
+  `stream_gauges`/`stream_value`/`stream_labels`/`stream_label`; `--stream-gauges`
+  is an overlay flag on map/run/nexrad/zoom/burn/export. **Colouring gauges by a
+  value now draws a colour bar** (right slot when there is no field, else left) —
+  the first render encoded peak discharge with no key, the same flaw as a
+  graduated symbol without a size legend. On-map labels go to the **highest-
+  discharge** gauges, not the first N in file order, because a dozen names along
+  one river collide.
+  **`--flow` is NOT on the `flow` parser**: the command always draws its own
+  gauges, so the overlay flag would be inert there — a flag that silently does
+  nothing is worse than no flag (tested).
+  **Store** mirrors `fetch_gauge_event`: `<key>_streamgauges.geojson` +
+  `StreamGaugeData/<key>_stream_<site>.csv` (added to `layout.RESERVED`, like
+  `RainGaugeData`). **Caveat for the science: on a regulated river a sharp rise
+  may be a reservoir release, not a storm response** — `rise_ratio` and drainage
+  area help, but attribution is the analyst's call. **No new deps.** Tests:
+  `tests/test_streamflow.py` (56, offline — `requests.get` replaced by a
+  replaying double).
+
 - **Testing (`tests/`, pytest, added 2026-07-29) — run it before every push.**
-  `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **480 tests,
-  ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14/USMIN request,
+  `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **537 tests,
+  ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14/USMIN/NWIS request,
   no token), so it is cheap enough to run constantly. Config lives in
   `pyproject.toml` (`[tool.pytest.ini_options]`, `--strict-markers`); install the
   deps with `pip install -e ".[test]"`. Tests encode the **documented invariants**

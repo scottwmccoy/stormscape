@@ -31,7 +31,9 @@ shapely geometry) and, for rainfall, a **storm-day date**, it will:
    fire is still burning (`stormscape.burn`);
 7. **Overlay abandoned-mine features** — USGS **USMIN** dumps, tailings, adits
    and shafts — as points or a per-km² density surface, so historic mining sits
-   under the storm alongside the scar (`stormscape.mines`).
+   under the storm alongside the scar (`stormscape.mines`);
+8. **Pull USGS stream gauges** in the AOI — discharge and stage hydrographs, on
+   the map and against the rain that produced them (`stormscape.streamflow`).
 
 It was lifted out of a post-fire debris-flow study and generalized: nothing
 here is tied to that project's fire perimeters or event inventory — you supply
@@ -699,6 +701,70 @@ single density number is not a meaningful quantity.
 credentialed feed is a source entry, not a code change: NDOM is already registered
 with its service URLs and a `$STORMSCAPE_NDOM_TOKEN` hook, so `--source ndom
 --token …` is all that is needed once access lands.
+
+---
+
+### USGS stream gauges — discharge & stage hydrographs
+
+`flow` pulls the USGS stream gauges inside the AOI and plots what came **down
+the channel**, against the rain that produced it. Where `gauges` measures what
+fell out of the sky at a point, this measures the catchment's answer — and for
+post-fire work the pairing is the point, since a burned catchment converts rain
+to runoff at a rate an unburned one does not.
+
+```bash
+python -m stormscape flow --aoi event_AOI.kmz --date 20260813 \
+    --out-dir ./out --key event --dem --reference --clip
+```
+
+That writes `event_streamgauges.geojson` (locations + a peak summary),
+`event_streamflow.csv`, one CSV per gauge under `StreamGaugeData/`,
+`event_hydrographs.png` (an atlas, one panel per gauge on a shared time axis),
+and `event_streamgauges.png` (the gauges on the map, coloured by peak
+discharge). `--detail` adds a full-size hydrograph per gauge under
+`HydrographFigures/`, and `--rain` draws the event's rain gauge as an inverted
+**hyetograph** above each one — rain falling from the top onto the hydrograph
+below, so the lag between the cell and the peak reads directly.
+
+Every map command also takes `--stream-gauges` to overlay the gauges (blue
+squares, deliberately unlike the rain gauges' yellow circles), optionally
+coloured by a summary column with `--stream-value peak_discharge`.
+
+**Two USGS sources, one interface.** USGS is mid-migration off the legacy
+NWIS Water Services, so `--source` picks the backend:
+
+| `--source` | endpoint | key | status |
+|---|---|---|---|
+| `nwis` *(default)* | `waterservices.usgs.gov` | none | announced for decommission, timeline uncertain |
+| `ogc` | `api.waterdata.usgs.gov` | optional | the modernized replacement; 100 req/hour anonymous, 1,000 with a free key (`$STORMSCAPE_USGS_API_KEY`) |
+
+The legacy service is still the default because the replacement is served under
+a `/v0/` path — but `ogc` is implemented and tested, not a stub. Both were
+verified to return **the same 20 gauges** over the same AOI and **byte-identical
+values** (max difference 0.000000 cfs across 289 timestamps), so switching is one
+flag on the day the legacy service goes away. `--list-sources` shows both.
+
+**Units.** Every series carries both — `discharge_cms`/`discharge_cfs` and
+`stage_m`/`stage_ft` — because USGS publishes cubic feet per second while the
+rest of stormscape is metric. Summaries and figures default to **SI** to match
+the rainfall side; `--units cfs` reads them the way the USGS gauge page does.
+Nothing is lost either way: the conversions are exact and both columns are
+always written.
+
+**It says when the window cut the hydrograph.** A gauge whose peak lands on its
+final observation was still rising when the record stopped, so its peak — and
+every quantity derived from it — reads low. Those gauges carry `peak_at_edge`
+and the run names them, rather than letting a truncated storm pass as a
+complete one.
+
+> **Timestamps.** NWIS returns the *gauge's local time with an offset*, not UTC.
+> Everything here is normalised to UTC on arrival so hydrographs line up with
+> MRMS, NEXRAD and the rain gauges. Missing values arrive as `-999999`, not null.
+>
+> **Regulated rivers.** On a dammed system a sharp rise may be a reservoir
+> release rather than a storm response. `rise_ratio` (peak ÷ the window's first
+> observation) and the drainage area help, but attribution on a regulated
+> channel is the analyst's call, not the tool's.
 
 ---
 
