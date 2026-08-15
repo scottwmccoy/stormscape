@@ -15,7 +15,10 @@ vector file, or a shapely geometry) plus a **storm-day date** into:
    labelled vector overlays (NHD streams, TIGER roads, GNIS places) and gauge
    points, plus a **radar-vs-gauge comparison** — per-gauge residuals + skill
    stats (`stormscape/plot.py`, `stormscape/compare.py`, `stormscape/refdata.py`);
-5. raw **single-radar NEXRAD Level II** tilts (reflectivity/velocity) for the
+5. **near-real-time burn severity** — CIMSS **BRISK** daily multi-satellite
+   dNBR composites (+ the BAER soil-burn-severity archive) over the AOI, cached,
+   classified and mapped (`stormscape/burn.py`);
+6. raw **single-radar NEXRAD Level II** tilts (reflectivity/velocity) for the
    radar nearest the AOI — gridded over the AOI or sampled at the gauges, with a
    Z–R diagnostic (`stormscape/nexrad.py`); the underlying radar behind the MRMS
    mosaic, and the way to reach pre-2020 events.
@@ -92,10 +95,11 @@ in `README.md`.
 - `stormscape/atlas14.py` — NOAA Atlas 14 gridded climatology → intensity fields + anomaly
 - `stormscape/smoothing.py` — NaN-aware field smoothing (gaussian/uniform/median/idw) + radar-gauge skill sweep
 - `stormscape/export.py` — georeferenced exports for GIS/CalTopo: EPSG:3857 GeoTIFFs (raw float + colorized RGBA) + GeoPDF figures
+- `stormscape/burn.py` — near-real-time burn severity (BRISK dNBR / BAER SBS)
 - `stormscape/refdata.py` — AOI-scoped NHD streams / TIGER roads / GNIS places
 - `stormscape/plot.py` — drape i15 over hillshade + basemap/vector/gauge overlays
 - `stormscape/data/` — bundled tables (`nexrad_sites.csv` NCEI HOMR, `atlas14_regions.csv`)
-- `stormscape/cli.py` — `stormscape {dem,i15,map,run,gauges,compare,nexrad,panels,vgauge,zoom,pick,climate,smooth,recurrence,export}`
+- `stormscape/cli.py` — `stormscape {dem,i15,map,run,gauges,compare,nexrad,panels,vgauge,zoom,pick,climate,smooth,recurrence,export,burn}`
 - `environment.yml`, `pyproject.toml`, `examples/`
 
 ## Conventions & gotchas (learned during development)
@@ -906,6 +910,142 @@ in `README.md`.
   **Gotcha for anyone testing this:** RQI/SHSR are read with `fetch` (singular),
   not `fetch_many` — mock both or the "offline" test hits S3 and CI's
   `-m "not network"` run breaks.
+- **Near-real-time burn severity (`burn.py`, CLI `burn`, 2026-08-14) — CIMSS
+  BRISK.** Puts a scar under the rain *while the fire is still burning*, which the
+  authoritative products cannot: BAER soil burn severity lands days-to-weeks after
+  containment and only for assessed fires, MTBS a year+. BRISK is a Google Earth
+  Engine **dNBR data-fusion composite over nine satellites** (GOES-E/W ABI, SNPP /
+  NOAA-20 / NOAA-21 VIIRS, Landsat 8/9, Sentinel-2a/b), mapping every large
+  (>~5,000 acre) US fire **daily**.
+  **Access — the portal is a decoy.** `cimss.ssec.wisc.edu/brisk` is a RealEarth
+  viewer whose WMTS (`re-brisk.ssec.wisc.edu/wmts/BurnScars-dNBR.xml`) serves
+  **rendered PNG tiles, capped at zoom 7** — pretty, not data. The raw field is in
+  the open Apache-indexed archive behind it, **one GeoTIFF per fire per day**:
+  `bin.ssec.wisc.edu/pub/realearth/brisk/<year>/<Fire>-<ST>-dNBR_<YYYYMMDD>_235959.tif`
+  (2025→present; 8k+ scenes / ~590 fires in 2026 alone, current through *today*).
+  So `burn.py` scrapes the directory index into a cached catalog and downloads
+  only the scenes that intersect the AOI.
+  **AOI screening is header-only.** GDAL range-reads a remote GeoTIFF header via
+  `/vsicurl/` in ~0.02 s across a 12-thread pool — a whole day's ~60 fires screen
+  in **1.4 s without downloading a pixel**; footprints are memoised in
+  `brisk_cache/bounds_dnbr.json`, so the first full-archive screen (~650 scenes,
+  ~25 s) makes every later one **0.04 s**. Index cache TTL is **6 h for the
+  current year and infinite for past years** (closed years never gain scenes),
+  and a dead server falls back to the stale index instead of failing.
+  **Gotchas, all measured:**
+  (a) scenes are **EPSG:3857 at "60 m", which is not 60 m of ground** — Web
+  Mercator metres shrink with latitude, so the cell is **46.5 m at 39°N**; areas
+  computed on the raw transform run ~66% high there, hence the `cos(lat)`
+  correction in `cli._burn_class_table`;
+  (b) every scene tested lands on an **exact 60 m multiple**, so mosaicking
+  neighbouring fires is a paste, not a warp;
+  (c) **NaN marks outside-the-burn but the files tag no nodata**, so
+  `masked=True` masks nothing — test `np.isfinite` (typically only 10-19% of a
+  scene is valid);
+  (d) dNBR is **unscaled** (~-0.3 to 1.0), not the ×1000 integer form the
+  MTBS/USGS thresholds are quoted in — `SEVERITY_SCHEMES["usgs"]` is
+  0.10/0.27/0.44/0.66, `["brisk"]` the portal's own 0.10/0.40/0.70;
+  (e) a fire's footprint **grows day to day**, so `find_scenes` takes the latest
+  scene per fire **on or before `--date`** — a storm-day map must not include
+  severity mapped after the storm.
+  **Mosaic rule: NaN-aware `np.fmax`.** Scenes are mostly NaN outside their own
+  fire, so a plain "first/last wins" merge blanks whichever fire is written second
+  wherever footprints overlap; `fmax` combines, is order-independent, and takes
+  the more severe value where two fires genuinely overlap. Each scene is
+  `reproject`d into one destination grid, so the same code path handles the
+  BAER scenes (which are **per-fire UTM at 20 m**, not 3857).
+  **BAER SBS (`--product sbs`, `baer-data/`)** is the authoritative soil product
+  but **sparse** (8 fires in 2026 vs BRISK's ~590) and classified uint8. Its
+  embedded palette colours 1-4 with BRISK's own four severity colours and paints
+  **0 and 5+ the same black** — i.e. the product itself treats anything outside
+  1-4 as a mask (water/inholding/unmapped, ~3% of the NV scene checked), so
+  `SBS_VALID = (1, 4)` reads the rest as missing rather than charting it as a
+  class. Categorical mosaics use **nearest** (averaging class 1 and 3 into 2
+  would be a fabricated severity).
+  **Display — the BAER palette is the default, and it IS the BRISK palette
+  (2026-08-14).** Measured, not assumed: **all 77** of the 2025 BAER
+  soil-burn-severity rasters — written by many different BAER teams, in ERDAS
+  Imagine — embed an *identical* class palette, `1 (0,128,128) teal / 2
+  (82,204,204) cyan / 3 (255,232,32) yellow / 4 (168,0,0) dark red` (only the
+  class-5 mask colour varies: black/gray/white). Those are exactly the four
+  colours in BRISK's `qgis_BRISK_dNBR_colorscale_v2.txt`, so the portal and the
+  BAER deliverables already share one scheme — `BAER_CLASS_COLORS` /
+  `BAER_ANCHORS` (`BRISK_ANCHORS` is an alias; `register_brisk_cmap` →
+  `register_baer_cmap`). Maps are **classed by default**, the way BAER
+  publishes: `burn.severity_colors(scheme)` returns
+  `(ListedColormap, BoundaryNorm, ticks, labels)` so the field is banded at the
+  severity breaks and the **colour bar is labelled with class names, not dNBR
+  numbers**. A 4-class scheme uses the official table exactly; the 5-class
+  `usgs` scheme has no official 5th colour so its colours are *sampled from the
+  same ramp* at class midpoints (documented, not smuggled). `--continuous` gives
+  the smooth ramp (same colours), an explicit `--cmap` opts out entirely.
+  This required `plot.drape_i15` to gain **`norm=` / `cbar_ticks=` /
+  `cbar_ticklabels=`** (a norm replaces the linear `vmin=0,vmax=` scale) — small
+  and general, usable by any future classed map. `_burn_display_defaults`
+  resolves the cut/scale **per product** — dNBR 0.10/1.0, SBS 1.5/4.0 — because
+  one shared default would clip the class map to its lowest class or paint
+  unburned ground. The drape reuses `drape_i15` (so `--reference`/`--clip`/north
+  arrow/ticks all just work); `--alpha` is worth raising from the project 0.32
+  when the scar is the subject.
+  **BAER also publishes its own dNBR, and BRISK matches it (validated
+  2026-08-14).** `baer-data/<year>/` holds `<Fire>-<ST>-prelim-dNBR_<date>_*.tif`
+  (**118 for 2025**, none yet for 2026) alongside the `-sbs_` rasters — note the
+  **`-prelim-` infix**, which `parse_name` strips. They are **int16 ×1000**
+  (the BARC convention; NOAA's own `BARC256 = dNBR×5 − 275` identity confirms the
+  scaling), **ESRI:102039** Albers, **20 m where the source was Sentinel-2 and
+  30 m where it was Landsat**. **39 fires have both products.** Method: divide
+  BAER by 1000 and `Resampling.average` it **down onto the BRISK grid** —
+  aggregating the finer product to the coarser support rather than upsampling
+  the thing under test — then score only **burned cells (BAER dNBR ≥ 0.1)**,
+  because the huge unburned surround agreeing near zero inflates r by ~0.03–0.1.
+  **Result: BRISK computes the same dNBR.** Pooled over 8 well-matched fires,
+  **r = 0.938 on 1.24 M cells, slope 1.089**; across all 39, median **slope
+  1.013, bias +0.003, ratio 1.011** — unity slope, no bias. **The disagreements
+  are compositing latency, not a different algorithm**: every poor performer
+  (middle-mesa-nm r 0.03, turkeyfeather-nm 0.12, blind-az 0.22, derby-co 0.27,
+  dillon-ca 0.58, laguna-nm 0.60, island-creek-id 0.61) recovers to **r 0.80–0.96
+  when given a BRISK scene 5–21 days later**, and every one of them read *low* on
+  the BAER date — the composite had not yet ingested a clear post-fire overpass.
+  A pre-set (not per-fire-tuned) **+14 d** rule lifts the distribution: median r
+  0.874→0.913, r≥0.90 **14→24** of 39, r<0.60 **5→1**, IQR 0.765–0.934 → 0.866–0.932.
+  Note it rescues the *tail* rather than improving the median fire (21 better,
+  18 slightly worse) — a mature scar keeps darkening away from the BAER snapshot,
+  which is why the +14 d slope rises to ~1.05–1.09. **BAER 20 m (Sentinel-2)
+  agrees better than 30 m (Landsat)** — median r 0.923 vs 0.814, Mann-Whitney
+  **p = 0.0005** — most likely because BRISK's composite and the Sentinel-based
+  BAER share the same underlying acquisition. **Operational rule: trust BRISK's
+  *pattern* immediately, but give the composite ~2 weeks before trusting its
+  *magnitude*** — early scenes under-read. Study script + CSVs live in the
+  repo as **`examples/brisk_vs_baer.py`** (reruns the whole study from the two
+  catalogs; writes CSV + figure to `--out-dir`, default `baer_study/`, which is
+  gitignored). The BAER dNBR is reachable as **`--product baer_dnbr`**
+  (`PRODUCTS[...]["scale"] = 1000.0` divides it back to a plain index on read).
+  **Acted on in the tool:** `burn.MATURITY_DAYS = 14`; `find_scenes` adds an
+  **`age_days`** column (days since the fire's *first* appearance in the
+  catalog, computed **before** any `--date`/`--since` trim, or trimming early
+  scenes would make an old fire look new), `--list` prints it and stars
+  immature composites, `burn_severity` prints an advisory, and **`--min-age
+  DAYS`** hard-filters. The maturity screen runs **after** the AOI
+  intersection -- filtering the national catalog first named 593 irrelevant
+  fires in the drop message. Off by default: an immature scar still beats no
+  scar, provided the run says so.
+  **`dnbr`/`severity` are deliberately NOT in `plot._MASK_DRY`** — that mask cuts
+  below 0.5, which on a 0-1 dNBR field would erase everything short of high
+  severity, and it also drives smoothing, which a severity field does not want.
+  **THE CAVEAT THAT MATTERS FOR THIS GROUP'S SCIENCE: dNBR is a *vegetation*
+  index, not soil burn severity.** The USGS post-fire debris-flow models are
+  calibrated on **soil** burn severity — dNBR adjusted by field crews for
+  hydrophobicity, ground cover and duff consumption. BRISK is explicitly
+  **interim**: act on it early, then supersede with `--product sbs`.
+  Outputs are `mrms`-style result dicts (`save_fields` / `drape_i15` just work):
+  `<key>_dnbr.tif`, `<key>_severity.tif`, `<key>_burn_classes.csv` (pixels + true
+  km² + fraction per class), `<key>_burn_scenes.geojson` (provenance: which fire,
+  which date), `<key>_burn.png`. Cache is `brisk_cache/` (added to
+  `layout.RESERVED`, matches `nexrad_cache/`; keep out of git). **No new deps.**
+  Validated live on Ward NV 20260814 (91.2 km² burned, 6.3% high severity),
+  a 15-fire central-Oregon mosaic, and Cottonwood-Peak NV SBS.
+  Tests: `tests/test_burn.py` (48, offline — synthetic listings + local GeoTIFFs).
+
 - **Testing (`tests/`, pytest, added 2026-07-29) — run it before every push.**
   `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **232 tests,
   ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14 request, no

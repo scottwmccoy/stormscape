@@ -1136,6 +1136,199 @@ def _cmd_climate(args):
                  gauges_arg=gauges_arg, title=args.title)
 
 
+def _burn_class_table(result, bounds, path):
+    """Per-class pixel count and **true** ground area of a severity mosaic.
+
+    The grid is EPSG:3857, whose metres shrink with latitude, so a nominal 60 m
+    cell is ~46.5 m of ground at 39 deg N. Areas computed on the raw transform
+    would be ~66% too large there; scale by cos(lat) first.
+    """
+    import math
+
+    import numpy as np
+    import pandas as pd
+
+    from .burn import SBS_LABELS, SEVERITY_SCHEMES
+
+    cls = result["fields"].get("severity")
+    if cls is None:
+        return None
+    lat = (bounds[1] + bounds[3]) / 2.0
+    res = abs(result["transform"].a) * math.cos(math.radians(lat))
+    cell_km2 = (res / 1000.0) ** 2
+    scheme = result["meta"].get("scheme")
+    if scheme == "baer":
+        labels = SBS_LABELS
+    else:
+        labels = dict(enumerate(SEVERITY_SCHEMES[scheme]["labels"]))
+    finite = cls[np.isfinite(cls)]
+    rows = []
+    for c in sorted(set(np.unique(finite).tolist())):
+        n = int((finite == c).sum())
+        rows.append(dict(cls=int(c), label=labels.get(int(c), f"class {int(c)}"),
+                         pixels=n, area_km2=round(n * cell_km2, 4),
+                         fraction=round(n / max(finite.size, 1), 4)))
+    df = pd.DataFrame(rows)
+    df.to_csv(path, index=False)
+    return df
+
+
+def _burn_display_defaults(product):
+    """``(wet_min, vmax)`` for the burn drape, which differ by product.
+
+    dNBR is a continuous 0-1 index cut at the 0.10 unburned break; BAER soil
+    burn severity is classes 1-4, so it needs a class-height scale and its cut
+    just above class 1 ("unburned/very low"). Sharing one default would either
+    clip the class map to its lowest class or paint unburned ground."""
+    if product == "sbs":
+        return 1.5, 4.0
+    return 0.10, 1.0
+
+
+def _cmd_burn(args):
+    """Near-real-time burn severity (CIMSS BRISK dNBR) over an AOI.
+
+    Screens the archive for fires intersecting the AOI, caches their GeoTIFFs,
+    mosaics them onto one grid, and drapes the result over a hillshade."""
+    import geopandas as gpd
+
+    from .aoi import bbox_polygon, load_aoi
+    from .burn import (CACHE_DIR, MATURITY_DAYS, SBS_LABELS, burn_severity,
+                       find_scenes, register_baer_cmap, severity_colors)
+    from .mrms import save_fields
+    from .plot import drape_i15
+
+    aoi = _aoi_from_args(args)
+    bounds, geom = load_aoi(aoi)
+    key = args.key or "burn"
+    cache = args.cache_dir or os.path.join(args.out_dir, CACHE_DIR)
+    years = args.years or None
+
+    if args.list:                       # cheap: headers only, nothing downloaded
+        sc = find_scenes(aoi, product=args.product, date=args.date,
+                         since=args.since, latest=not args.all_dates,
+                         years=years, min_age_days=args.min_age,
+                         cache_dir=cache)
+        if not len(sc):
+            print("no burn-severity scenes intersect this AOI")
+            return None
+        print(f"\n{'fire':<28} {'st':<3} {'date':<12} {'age':>5}  overlap")
+        for r in sc.itertuples(index=False):
+            flag = " *" if r.age_days < MATURITY_DAYS else ""
+            print(f"{str(r.fire):<28} {str(r.state or ''):<3} "
+                  f"{str(r.date):<12} {r.age_days:>4}d  {r.overlap:.5f}{flag}")
+        if (sc.age_days < MATURITY_DAYS).any():
+            print(f"  * composite younger than {MATURITY_DAYS} d -- pattern is "
+                  f"reliable, magnitude may under-read (see --min-age)")
+        return sc
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    res = burn_severity(aoi, date=args.date, product=args.product,
+                        scheme=args.scheme, since=args.since,
+                        fires=args.fire, years=years, cache_dir=cache,
+                        min_age_days=args.min_age, pad_deg=args.pad_deg,
+                        workers=args.workers)
+    if res is None:
+        print("nothing to map: no fire in this AOI "
+              "(widen --bbox/--aoi, or check --date / --since)")
+        return None
+
+    m = res["meta"]
+    dates = sorted(set(m["scene_dates"]))
+    print(f"\n{len(m['fires'])} fire(s): {', '.join(map(str, m['fires']))}")
+    print(f"scene dates: {dates[0]}" + (f" .. {dates[-1]}" if len(dates) > 1 else ""))
+    if len(dates) > 1:
+        # a mixed-date mosaic is legitimate (fires burn at different times) but
+        # it is not one snapshot, so say so rather than let it pass unnoticed
+        print("note: scenes span several dates; each fire is shown at its own "
+              "latest observation on or before --date")
+
+    paths = save_fields(res, args.out_dir, key, layout=args.layout)
+    for p in paths:
+        print(f"wrote {p}")
+
+    scenes = find_scenes(aoi, product=args.product, date=args.date,
+                         since=args.since, latest=not args.all_dates,
+                         years=years, min_age_days=args.min_age,
+                         cache_dir=cache, verbose=False)
+    if len(scenes):
+        gp = out_path(args.out_dir, f"{key}_burn_scenes.geojson",
+                      layout=args.layout)
+        scenes.assign(date=scenes.date.astype(str)).to_file(gp, driver="GeoJSON")
+        print(f"wrote {gp}")
+
+    tpath = out_path(args.out_dir, f"{key}_burn_classes.csv", layout=args.layout)
+    tbl = _burn_class_table(res, bounds, tpath)
+    if tbl is not None:
+        print(f"wrote {tpath}")
+        print(tbl.to_string(index=False))
+
+    if args.no_map:
+        return res
+
+    hs_path = args.hillshade or find(args.out_dir, f"{key}_hillshade.tif")
+    if args.dem and not os.path.exists(hs_path):
+        from .dem import fetch_dem_and_hillshade
+        dem_path = out_path(args.out_dir, f"{key}_dem.tif", layout=args.layout)
+        hs_path = out_path(args.out_dir, f"{key}_hillshade.tif",
+                           layout=args.layout)
+        print(f"fetching {args.resolution} m DEM for the AOI")
+        fetch_dem_and_hillshade(aoi, resolution=args.resolution,
+                                dst_crs=args.dst_crs, dem_path=dem_path,
+                                hillshade_path=hs_path, pad_deg=args.pad_deg,
+                                resampling=getattr(args, "resampling", None))
+    if not os.path.exists(hs_path):
+        print(f"note: no hillshade at {hs_path}; rendering without terrain "
+              f"(pass --hillshade, or --dem to fetch one)")
+        hs_path = None
+
+    d_wet, d_vmax = _burn_display_defaults(args.product)
+    wet_min = d_wet if args.wet_min is None else args.wet_min
+    vmax = d_vmax if args.vmax is None else args.vmax
+    field = "severity" if args.product == "sbs" else "dnbr"
+
+    # Classed by default, in the BAER class colours -- how burn severity is
+    # actually published. --continuous falls back to the smooth ramp (same
+    # palette), and an explicit --cmap opts out of the class colours entirely.
+    norm = cbar_ticks = cbar_ticklabels = None
+    cmap = args.cmap
+    if cmap in (None, "baer", "brisk"):
+        if args.continuous or args.product == "sbs":
+            cmap = register_baer_cmap().name
+        else:
+            cmap, norm, cbar_ticks, cbar_ticklabels = severity_colors(args.scheme)
+            vmax = None                   # the norm owns the scale now
+    if args.product == "sbs":             # already classed 1-4; label them
+        cbar_ticks = sorted(SBS_LABELS)
+        cbar_ticklabels = [SBS_LABELS[k] for k in cbar_ticks]
+    fpath = find(args.out_dir, f"{key}_{field}.tif")
+    png = out_path(args.out_dir, f"{key}_burn.png", layout=args.layout)
+    label = ("soil burn severity (BAER)" if args.product == "sbs"
+             else "burn severity  (dNBR class)" if norm is not None
+             else "dNBR [-]")
+    title = args.title or (
+        f"Burn severity ({'BAER SBS' if args.product == 'sbs' else 'BRISK dNBR'})"
+        f" - {', '.join(map(str, m['fires']))[:60]}  {dates[-1]}")
+    clip_gdf = (gpd.GeoDataFrame(geometry=[geom or bbox_polygon(bounds)], crs=4326)
+                if args.clip else None)
+    drape_i15(hs_path, fpath, out_path=png, work_crs="UTM",
+              wet_min=wet_min, vmax=vmax, cmap=cmap, norm=norm,
+              cbar_ticks=cbar_ticks, cbar_ticklabels=cbar_ticklabels,
+              alpha=args.alpha, title=title, cbar_label=label,
+              perimeters=args.perimeters, basins=args.basins,
+              highlight=args.highlight, points=args.points,
+              reference=args.reference, local_roads=args.local_roads,
+              label_reference=not args.no_reference_labels,
+              basemap=args.basemap, basemap_provider=args.basemap_provider,
+              basemap_labels=args.basemap_labels, basemap_zoom=args.basemap_zoom,
+              hillshade_alpha=args.hillshade_alpha,
+              clip=clip_gdf, clip_margin=args.clip_margin,
+              north_arrow=True, scale_ticks=True, dpi=args.dpi)
+    print(f"wrote {png}")
+    _save_event_aoi(args, args.out_dir, key)
+    return res
+
+
 def _cmd_export(args):
     """Georeferenced exports for GIS / CalTopo from an already-processed event:
     EPSG:3857 GeoTIFFs of the rainfall fields (raw float + colorized RGBA) and
@@ -2183,6 +2376,71 @@ def main(argv=None):
     _add_gauge_opts(psm)      # --token/--durations/--start/--end (fetch fallback)
     _add_overlays(psm)
     psm.set_defaults(func=_cmd_smooth)
+
+    pb = sub.add_parser(
+        "burn",
+        help="near-real-time burn severity (CIMSS BRISK dNBR) over an AOI",
+        description="Fetch, cache and map near-real-time burn severity. BRISK "
+                    "maps every large US fire daily from a nine-satellite dNBR "
+                    "composite -- an INTERIM product: supersede it with BAER "
+                    "soil burn severity (--product sbs) when that lands.")
+    _add_aoi(pb)
+    pb.add_argument("--date", help="scar as of this date (YYYYMMDD); each fire "
+                                   "is shown at its latest scene on or before "
+                                   "it (default: latest available)")
+    pb.add_argument("--since", help="ignore scenes older than YYYYMMDD (e.g. to "
+                                    "exclude last season's fires)")
+    pb.add_argument("--product", default="dnbr",
+                    choices=["dnbr", "sbs", "baer_dnbr"],
+                    help="dnbr = BRISK daily composite (default); sbs = BAER "
+                         "soil burn severity, authoritative but only for fires "
+                         "with a completed assessment; baer_dnbr = the BAER "
+                         "teams' own dNBR (2025 only so far)")
+    pb.add_argument("--min-age", type=float, default=None, metavar="DAYS",
+                    help="require the composite to be at least DAYS old (days "
+                         "since the fire entered the archive) and skip fires "
+                         "that are not, naming them. A young composite has the "
+                         "right pattern but reads LOW; ~14 d is where agreement "
+                         "with BAER's own dNBR settles (examples/brisk_vs_baer.py). "
+                         "Off by default: an immature scar still beats none, and "
+                         "the run says so.")
+    pb.add_argument("--scheme", default="usgs", choices=["usgs", "brisk"],
+                    help="dNBR severity breaks: usgs = MTBS/USGS 0.10/0.27/0.44/"
+                         "0.66 (default), brisk = the portal's 0.10/0.40/0.70")
+    pb.add_argument("--fire", nargs="+", metavar="NAME",
+                    help="restrict to these fire names (as listed by --list)")
+    pb.add_argument("--years", type=int, nargs="+", metavar="Y",
+                    help="archive years to search (default: this year and last)")
+    pb.add_argument("--all-dates", action="store_true",
+                    help="with --list, show every scene per fire instead of "
+                         "only the latest")
+    pb.add_argument("--list", action="store_true",
+                    help="list the fires intersecting the AOI and stop "
+                         "(headers only -- downloads nothing)")
+    pb.add_argument("--cache-dir",
+                    help="scene cache (default <out-dir>/brisk_cache)")
+    pb.add_argument("--workers", type=int, default=12)
+    pb.add_argument("--vmax", type=float, default=None,
+                    help="colour-scale max for the drape (default 1.0 for dNBR, "
+                         "4.0 for the sbs class field)")
+    pb.add_argument("--hillshade", help="hillshade tif for the map backdrop")
+    pb.add_argument("--dem", action="store_true",
+                    help="fetch a DEM + hillshade for the AOI if none is found")
+    pb.add_argument("--resolution", type=int, default=10,
+                    help="DEM resolution for --dem (default 10 m)")
+    _add_dem_opts(pb)
+    pb.add_argument("--no-map", action="store_true",
+                    help="write the rasters and table only, no figure")
+    _add_overlays(pb)
+    pb.add_argument("--continuous", action="store_true",
+                    help="shade dNBR as a continuous ramp instead of banding it "
+                         "into the severity classes BAER publishes (same colours)")
+    # burn severity is not rainfall: the YlGnBu / 5 mm-h defaults from
+    # _add_overlays would mis-scale it. The default colours are the BAER class
+    # palette (verified identical across every 2025 BAER product, and the same
+    # four colours BRISK publishes); the cut and scale are resolved per product
+    # in _burn_display_defaults, so wet_min starts as None rather than 5 mm/h.
+    pb.set_defaults(func=_cmd_burn, cmap="baer", wet_min=None)
 
     args = ap.parse_args(argv)
     # One switch for the whole process rather than threading `layout=` through

@@ -33,6 +33,9 @@ or from the command line::
 from .aoi import load_aoi, pad_bounds
 from .atlas14 import (anomaly, climatology_field, fetch_grid, grid_url,
                       pf_point, recurrence_interval, region_for_bounds)
+from .burn import (SEVERITY_SCHEMES, burn_severity, catalog as burn_catalog,
+                   classify as burn_classify, fetch_scene, find_scenes,
+                   register_brisk_cmap)
 from .compare import (comparison_stats, compare_storm, gauge_recurrence_table,
                       radar_vs_gauge, sample_raster_at_points)
 from .merge import (conditional_merge, local_bias, loo_cross_validate,
@@ -94,4 +97,6 @@ __all__ = [
     "reproject_geotiff", "export_geotiffs", "export_streams",
     "figure_to_geopdf", "geopdf_supported", "DEFAULT_EXPORT_FIELDS",
     "streams", "roads", "places", "reference_layers",
+    "burn_severity", "find_scenes", "burn_catalog", "fetch_scene",
+    "burn_classify", "SEVERITY_SCHEMES", "register_brisk_cmap",
 ]

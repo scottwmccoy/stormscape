@@ -341,7 +341,8 @@ def _add_scale_ticks(ax, work_crs):
 
 
 def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
-              wet_min=5.0, vmax=None, cmap="YlGnBu", alpha=None,
+              wet_min=5.0, vmax=None, cmap="YlGnBu", alpha=None, norm=None,
+              cbar_ticks=None, cbar_ticklabels=None,
               perimeters=None, basins=None, highlight=None, points=None,
               gauges=None, gauge_value=None, gauge_cmap=None, gauge_vmax=None,
               gauge_label=None,
@@ -370,6 +371,12 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
         through the rain; pass a value to override.
     vmax
         Colour-scale max; default is the 99th percentile of i15 (>= 10).
+    norm, cbar_ticks, cbar_ticklabels
+        Override the linear ``0..vmax`` scale with a matplotlib norm, and label
+        the colour bar with something other than numbers. Together these draw a
+        *classed* map -- a ``BoundaryNorm`` on the class breaks plus the class
+        names as tick labels, which is how burn severity is published (see
+        :func:`stormscape.burn.severity_colors`).
     perimeters, basins, highlight, points
         Optional vector overlays (path or GeoDataFrame, any CRS):
           * ``perimeters`` -- outlined white-over-black (e.g. fire/AOI border);
@@ -482,7 +489,7 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
     if i15v.ndim == 3:
         i15v = i15v[0]
     i15m = np.ma.masked_less(i15v, wet_min)
-    if vmax is None:
+    if vmax is None and norm is None:
         finite = i15da.values[np.isfinite(i15da.values)]
         vmax = max(float(np.percentile(finite, 99)) if finite.size else 10.0,
                    10.0)
@@ -511,9 +518,12 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
         ax.imshow(hsv, cmap="gray", extent=ext, origin="upper",
                   vmin=hillshade_vmin, vmax=hillshade_vmax, zorder=0.6,
                   alpha=hs_alpha)
+    # a norm (e.g. the BoundaryNorm behind a classed burn-severity map) replaces
+    # the linear vmin/vmax scale rather than fighting with it
+    scale_kw = dict(norm=norm) if norm is not None else dict(vmin=0, vmax=vmax)
     im = ax.imshow(i15m, cmap=cmap, extent=ext, origin="upper",
-                   alpha=i15_alpha, vmin=0, vmax=vmax, zorder=1,
-                   interpolation="nearest")
+                   alpha=i15_alpha, zorder=1,
+                   interpolation="nearest", **scale_kw)
     _apply_clip()                      # set view before any basemap tile fetch
     if basemap:
         _add_basemap(ax, work_crs,
@@ -593,7 +603,11 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
     from mpl_toolkits.axes_grid1 import make_axes_locatable
     div = make_axes_locatable(ax)
     cax = div.append_axes("right", size="4%", pad=0.12)
-    cb = fig.colorbar(im, cax=cax)
+    cb = fig.colorbar(im, cax=cax,
+                      **(dict(ticks=cbar_ticks) if cbar_ticks is not None
+                         else {}))
+    if cbar_ticklabels is not None:      # e.g. severity class names, not numbers
+        cb.ax.set_yticklabels(cbar_ticklabels, fontsize=9)
     cb.set_label(cbar_label or
                  "peak 15-min rainfall intensity  i$_{15}$  (mm h$^{-1}$)",
                  fontsize=10)
@@ -646,6 +660,11 @@ _PANEL_SPECS = {
     "i60max": ("Peak i60", "YlGnBu", 0.0, None, "mm h$^{-1}$"),
     "i2max": ("Peak i2", "YlGnBu", 0.0, None, "mm h$^{-1}$"),
     "peakrate_mmph": ("Peak rate", "YlGnBu", 0.0, None, "mm h$^{-1}$"),
+    # burn severity (stormscape.burn). Not in _MASK_DRY: BRISK dNBR is already
+    # NaN outside the burn, and that mask's 0.5 cut would erase everything below
+    # high severity -- dNBR runs about -0.3 to 1.
+    "dnbr": ("Burn severity (dNBR)", "YlOrRd", 0.0, 1.0, "dNBR [-]"),
+    "severity": ("Burn severity class", "YlOrRd", 0.0, None, "class"),
 }
 
 
