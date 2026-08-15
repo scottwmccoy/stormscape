@@ -617,6 +617,57 @@ python -m stormscape run --aoi event_AOI.kmz --date 20260619 --out-dir ./out \
 
 ---
 
+### `flow` — USGS stream gauges (discharge + stage)
+
+Pulls the USGS stream gauges inside the AOI and plots what came **down the
+channel**, against the rain that produced it. Writes the canonical store (gauge
+locations + peak summary, one CSV per gauge), a hydrograph atlas, and a map.
+
+Groups **A + C**, plus:
+| Arg | Type / default | Meaning |
+|---|---|---|
+| `--date YYYYMMDD` | str | storm day (scans the local day); or give `--start`/`--end` |
+| `--start`/`--end` | `YYYYMMDDHHMM` | explicit UTC analysis window |
+| `--source {nwis,ogc}` | `nwis` | `nwis` = legacy Water Services (no key, announced for decommission); `ogc` = the modernized replacement API |
+| `--api-key KEY` | str | USGS key for `--source ogc` (else `$STORMSCAPE_USGS_API_KEY`). Optional — anonymous is 100 req/hour |
+| `--list-sources` | flag | list both USGS sources and stop |
+| `--units {si,cfs}` | `si` | m³/s and m (matching the rest of stormscape), or ft³/s and ft as USGS publishes. Both are always written to the CSVs |
+| `--include-inactive` | flag | include discontinued gauges (historical events) |
+| `--min-peak Q` | float | drop gauges peaking below this from the atlas — an AOI full of irrigation drains otherwise buries the rivers |
+| `--detail` | flag | one full-size hydrograph per gauge → `HydrographFigures/` |
+| `--rain` | flag | with `--detail`, draw the event's rain gauge as an inverted hyetograph above each hydrograph (needs a `gauges` store in the same folder) |
+| `--rain-key KEY` | str | key of that rain-gauge store (default: the same `--key`) |
+| `--no-atlas` | flag | skip the multi-gauge atlas |
+| `--label-gauges` | flag | label the gauges on the map (the highest-discharge ones first) |
+| `--i15 PATH` | path | rainfall field to drape under the gauges (default `<key>_i15max.tif` if present) |
+| `--hillshade` / `--dem` / `--resolution` | | map backdrop, as for `burn`/`mines` |
+| `--no-map` | flag | write the store, table and hydrographs only |
+
+The gauges are also an **overlay on any map-drawing command** (`map`, `run`,
+`nexrad`, `zoom`, `burn`, `export`) via `--stream-gauges`, with `--stream-value`
+to colour them by a summary column and `--stream-labels` to name them.
+
+A gauge whose peak lands on its **last observation** was still rising when the
+window ended; those carry `peak_at_edge` and the run names them, so a truncated
+storm does not pass as a complete one.
+
+```bash
+# hydrographs + map for a storm day
+python -m stormscape flow --aoi event_AOI.kmz --date 20260813 \
+    --out-dir ./out --key event --dem --reference --clip
+
+# a tight window, per-gauge figures with the rain on top, in USGS units
+python -m stormscape flow --aoi event_AOI.kmz \
+    --start 202608130000 --end 202608140000 --out-dir ./out --key event \
+    --units cfs --detail --rain --min-peak 1
+
+# or just overlay the gauges on the storm map
+python -m stormscape run --aoi event_AOI.kmz --date 20260813 --out-dir ./out \
+    --key event --reference --clip --stream-gauges --stream-value peak_discharge
+```
+
+---
+
 ## Outputs at a glance
 
 | Command | Writes |
@@ -636,4 +687,5 @@ python -m stormscape run --aoi event_AOI.kmz --date 20260619 --out-dir ./out \
 | `smooth` | `<key>_smoothing_compare.png`; with `--gauge-analysis` also `<key>_smoothing_skill.png` + `.csv`; with `--write` smoothed `<key>_<field>.tif` |
 | `recurrence` | `<key>_gauge_recurrence.csv` + `.md` (per wet gauge: peak I15/30/60, time-of-peak, anomaly, recurrence interval) |
 | `export` | `<key>_<field>_3857.tif` (raw) + `_3857_rgb.tif` (colorized) per `--layers`; `<key>.pdf` + `<key>_anom_i{d}.pdf` GeoPDFs (needs `libgdal-pdf`); with `--streams`, `<key>_streams.geojson` (NHD network) |
+| `flow` | `<key>_streamgauges.geojson` (locations + peak summary), `<key>_streamflow.csv`, `StreamGaugeData/<key>_stream_<site>.csv` per gauge, `<key>_hydrographs.png` (atlas), `<key>_streamgauges.png` (map); `--detail` adds `HydrographFigures/` |
 | `mines` | `<key>_mines.geojson` (features + group), `<key>_mine_classes.csv` (per-group tally + the types present), `<key>_mine_density.tif` (features per km², EPSG:5070), `<key>_mines.png` |

@@ -53,6 +53,9 @@ from .mines import (GROUPS as MINE_GROUPS, SOURCES as MINE_SOURCES,
                     density_raster as mine_density_raster,
                     group_counts as mine_group_counts, group_of as mine_group_of,
                     mine_features, register_source as register_mine_source)
+from .streamflow import (SOURCES as STREAM_SOURCES, fetch_stream_event,
+                         flow_summary, load_event_series as load_stream_series,
+                         stream_series, stream_sites)
 from .mrms import (compute_i15, fetch, fetch_many, i15_storm_day,
                    multisensor_total, parse_date, save_fields,
                    virtual_gauge_timeseries)
@@ -107,4 +110,6 @@ __all__ = [
     "mine_features", "mine_density_grid", "mine_density_raster",
     "mine_group_counts", "mine_group_of", "register_mine_source",
     "MINE_GROUPS", "MINE_SOURCES",
+    "stream_sites", "stream_series", "flow_summary", "fetch_stream_event",
+    "load_stream_series", "STREAM_SOURCES",
 ]

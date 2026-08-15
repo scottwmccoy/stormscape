@@ -371,6 +371,237 @@ def add_mines(ax, work_crs, mines, mode="auto", cell_km=1.0, groups=None,
     return handles
 
 
+#: stream-gauge marker. Deliberately unlike the rain gauge's yellow circle --
+#: on a map carrying both, the two must not be mistaken for each other.
+STREAM_GAUGE_STYLE = dict(color="#0072B2", marker="s", label="stream gauge")
+
+
+def add_stream_gauges(ax, work_crs, gauges, value=None, cmap="viridis",
+                      vmin=None, vmax=None, size=110, label=None,
+                      label_names=False, max_labels=10):
+    """Overlay USGS stream gauges, optionally coloured by a summary column.
+
+    ``gauges`` is a GeoDataFrame (from
+    :func:`stormscape.streamflow.flow_summary`) or a vector path; it is
+    reprojected to ``work_crs``. With ``value=None`` the gauges are plain blue
+    squares; naming a column (e.g. ``"peak_discharge"``) colours them and
+    returns the scatter so the caller can attach a colour bar. Gauges with no
+    value are drawn as small open markers so a dry or missing record stays
+    visible rather than silently vanishing.
+
+    Returns ``(legend_handles, scatter_or_None)``.
+    """
+    from .aoi import read_overlay
+
+    g = read_overlay(gauges, work_crs)
+    handles = []
+    if g is None or not len(g):
+        return handles, None
+    st = STREAM_GAUGE_STYLE
+    xs, ys = g.geometry.x.to_numpy(), g.geometry.y.to_numpy()
+    sc = None
+    if value is None or value not in g.columns:
+        ax.scatter(xs, ys, marker=st["marker"], s=size, facecolor=st["color"],
+                   edgecolor="white", linewidth=1.4, zorder=6.7)
+        handles.append(Line2D([], [], marker=st["marker"], color=st["color"],
+                              mec="white", lw=0, markersize=9,
+                              label=label or st["label"]))
+    else:
+        vals = pd.to_numeric(g[value], errors="coerce").to_numpy(dtype="float64")
+        finite = np.isfinite(vals)
+        if (~finite).any():
+            ax.scatter(xs[~finite], ys[~finite], marker=st["marker"],
+                       s=size * 0.55, facecolor="none", edgecolor="0.5",
+                       linewidth=1.0, zorder=6.6)
+        if finite.any():
+            sc = ax.scatter(xs[finite], ys[finite], c=vals[finite],
+                            marker=st["marker"], s=size, cmap=cmap, vmin=vmin,
+                            vmax=vmax, edgecolor="white", linewidth=1.4,
+                            zorder=6.8)
+            handles.append(Line2D([], [], marker=st["marker"], color="0.3",
+                                  mec="white", lw=0, markersize=9,
+                                  label=label or st["label"]))
+    if label_names:
+        col = next((c for c in ("name", "site_no") if c in g.columns), None)
+        if col:
+            # label the gauges that carried the most water, not the first N in
+            # file order -- a dozen names along one river collide, so the ones
+            # that survive the cap should be the ones worth reading
+            lab = g
+            if value is not None and value in g.columns:
+                lab = g.assign(_v=pd.to_numeric(g[value], errors="coerce")
+                               ).sort_values("_v", ascending=False)
+            for _, row in lab.head(max_labels).iterrows():
+                _label_point(ax, row.geometry.x, row.geometry.y,
+                             str(row[col])[:24], 5.5)
+    return handles, sc
+
+
+def _flow_cols(units):
+    """(discharge column, stage column, discharge label, stage label)."""
+    si = str(units).lower() != "cfs"
+    return (("discharge_cms" if si else "discharge_cfs"),
+            ("stage_m" if si else "stage_ft"),
+            ("discharge  (m$^3$ s$^{-1}$)" if si else "discharge  (ft$^3$ s$^{-1}$)"),
+            ("stage  (m)" if si else "stage  (ft)"))
+
+
+def _draw_hyetograph(ax, rain, rain_col="i15_mmph"):
+    """Rainfall on an inverted axis -- the hyetograph convention, rain falling
+    from the top onto the hydrograph below it."""
+    if rain is None or not len(rain):
+        return False
+    col = rain_col if rain_col in rain.columns else next(
+        (c for c in ("i15_mmph", "i60_mmph", "precip_mm", "rate_mmph")
+         if c in rain.columns), None)
+    if col is None:
+        return False
+    ax.bar(rain.index, pd.to_numeric(rain[col], errors="coerce"),
+           width=(1.0 / 24 / 60) * 12, color="#2c7fb8", alpha=0.85,
+           align="center")
+    ax.invert_yaxis()
+    ax.set_ylabel("rain\n(mm h$^{-1}$)", fontsize=9)
+    ax.grid(True, alpha=0.3)
+    return True
+
+
+def hydrograph(df, name="stream gauge", out_path=None, units="si", rain=None,
+               rain_col="i15_mmph", figsize=(11, 6.0), dpi=170, title=None):
+    """Discharge + stage for one gauge, optionally under a rainfall hyetograph.
+
+    ``df`` is a UTC-indexed frame from
+    :func:`stormscape.streamflow.stream_series`. ``rain`` is an optional
+    rainfall series on the same time axis -- a real gauge from
+    :mod:`stormscape.gauges` or a radar virtual gauge from
+    :func:`stormscape.mrms.virtual_gauge_timeseries` -- drawn as an inverted
+    hyetograph above the hydrograph, which is the whole point of putting the two
+    modules in one package: the lag between the cell and the peak is the signal.
+
+    Discharge is the left axis and stage the right, sharing one time axis.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+
+    qcol, hcol, qlab, hlab = _flow_cols(units)
+    has_rain = rain is not None and len(rain)
+    if has_rain:
+        fig, (axr, ax) = plt.subplots(
+            2, 1, figsize=figsize, sharex=True,
+            gridspec_kw=dict(height_ratios=[1, 3], hspace=0.08))
+        has_rain = _draw_hyetograph(axr, rain, rain_col)
+        if not has_rain:
+            plt.close(fig)
+    if not has_rain:
+        fig, ax = plt.subplots(figsize=(figsize[0], figsize[1] * 0.8))
+
+    drew = False
+    if qcol in df.columns and df[qcol].notna().any():
+        ax.plot(df.index, df[qcol], color="#0072B2", lw=1.8, label="discharge")
+        ax.set_ylabel(qlab, fontsize=10, color="#0072B2")
+        ax.tick_params(axis="y", labelcolor="#0072B2")
+        peak = df[qcol].idxmax()
+        ax.plot([peak], [df[qcol].max()], "v", color="#0072B2", ms=9,
+                mec="black", mew=0.6, zorder=5)
+        drew = True
+    if hcol in df.columns and df[hcol].notna().any():
+        ax2 = ax.twinx()
+        ax2.plot(df.index, df[hcol], color="#D55E00", lw=1.2, ls="--",
+                 label="stage")
+        ax2.set_ylabel(hlab, fontsize=10, color="#D55E00")
+        ax2.tick_params(axis="y", labelcolor="#D55E00")
+        drew = True
+    if not drew:
+        ax.text(0.5, 0.5, "no discharge or stage in this window",
+                ha="center", va="center", transform=ax.transAxes, fontsize=11)
+
+    ax.grid(True, alpha=0.3)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+    for lab in ax.get_xticklabels():
+        lab.set_rotation(20)
+        lab.set_ha("right")
+    ax.set_xlabel("time (UTC)", fontsize=10)
+    fig.suptitle(title or f"{name}", fontsize=12)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    if out_path:
+        fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+    return fig, ax
+
+
+def hydrograph_atlas(series, names=None, out_path=None, units="si", ncols=3,
+                     panel=(4.0, 2.5), dpi=170, title=None, sort=True,
+                     min_peak=None):
+    """One small hydrograph per gauge, laid out in a grid.
+
+    ``series`` is ``{site_no: DataFrame}``; ``names`` optionally maps site
+    numbers to station names for the panel titles. Every panel shares the same
+    time axis so the gauges can be compared for **timing** -- which is usually
+    the question when several gauges sit on one channel network -- but each
+    keeps its own y-scale, because discharge across an AOI can span five orders
+    of magnitude and a shared scale would flatten every small creek to a line.
+
+    ``sort`` orders panels by peak discharge descending, so the rivers that
+    actually moved water come first instead of whatever order the site numbers
+    happened to be in. ``min_peak`` drops gauges below a threshold (in the
+    chosen units) -- useful where an AOI is full of irrigation drains.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+
+    items = [(k, v) for k, v in (series or {}).items() if v is not None and len(v)]
+    if not items:
+        return None, None
+    qcol, _, qlab, _ = _flow_cols(units)
+
+    def _peak(df):
+        return (float(df[qcol].max()) if qcol in df.columns
+                and df[qcol].notna().any() else float("-inf"))
+
+    if min_peak is not None:
+        items = [(k, v) for k, v in items if _peak(v) >= min_peak]
+        if not items:
+            return None, None
+    if sort:
+        items.sort(key=lambda kv: _peak(kv[1]), reverse=True)
+    names = names or {}
+    n = len(items)
+    ncols = max(1, min(ncols, n))
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, squeeze=False, sharex=True,
+                             figsize=(panel[0] * ncols, panel[1] * nrows))
+    lo = min(v.index.min() for _, v in items)
+    hi = max(v.index.max() for _, v in items)
+    for i, (site, df) in enumerate(items):
+        ax = axes[i // ncols][i % ncols]
+        if qcol in df.columns and df[qcol].notna().any():
+            ax.plot(df.index, df[qcol], color="#0072B2", lw=1.3)
+            ax.plot([df[qcol].idxmax()], [df[qcol].max()], "v", ms=6,
+                    color="#0072B2", mec="black", mew=0.5)
+        ax.set_xlim(lo, hi)
+        ax.set_title(f"{names.get(site, site)}"[:38], fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(labelsize=7)
+        if i % ncols == 0:
+            ax.set_ylabel(qlab, fontsize=8)
+    for j in range(n, nrows * ncols):                # blank the unused cells
+        axes[j // ncols][j % ncols].axis("off")
+    for ax in axes[-1]:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+        for lab in ax.get_xticklabels():
+            lab.set_rotation(30)
+            lab.set_ha("right")
+    fig.suptitle(title or "USGS stream gauges (UTC)", fontsize=13)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    if out_path:
+        fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+    return fig, axes
+
+
 def _add_north_arrow(ax, x=0.07, y=0.90):
     """A simple up-pointing north arrow with an 'N' label (axes fraction)."""
     import matplotlib.patheffects as pe
@@ -476,6 +707,8 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
               gauge_label=None,
               mines=None, mines_mode="auto", mines_kinds=None,
               mines_cell_km=1.0, mines_groups=None, mines_labels=False,
+              stream_gauges=None, stream_value=None, stream_labels=False,
+              stream_label=None,
               title=None, cbar_label=None, figsize=(9, 8.5), dpi=200,
               basemap=False, basemap_provider="USGS.USTopo",
               basemap_labels=None, basemap_zoom=None, hillshade_alpha=None,
@@ -530,6 +763,14 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
         fetch (default ``waste`` + ``openings``), ``mines_mode`` is
         ``"auto"``/``"points"``/``"density"``, and ``mines_groups`` restricts
         what a density map counts.
+    stream_gauges, stream_value, stream_labels
+        USGS stream-gauge overlay (see :func:`add_stream_gauges`).
+        ``stream_gauges=True`` auto-fetches the gauges in the map extent;
+        a GeoDataFrame or path is drawn as given. ``stream_value`` names a
+        column to colour them by (e.g. ``"peak_discharge"``), and
+        ``stream_label`` names that colour bar. The marker is a blue square,
+        deliberately unlike the rain gauge's yellow circle, so a map carrying
+        both stays readable.
     north_arrow, scale_ticks, legend
         Cartographic touches: ``north_arrow=True`` draws an up-arrow + "N";
         ``scale_ticks=True`` replaces the blank axes with distance tick marks
@@ -681,6 +922,7 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
     handles = []
     gauge_handles = []
     resid_scatter, resid_label = None, None
+    stream_scatter = None
     bas = read_overlay(basins, work_crs)
     if bas is not None and len(bas):
         bas.boundary.plot(ax=ax, color="0.25", lw=0.7, alpha=0.7, zorder=2)
@@ -728,6 +970,22 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
                                label=gauge_label or "gauge")
         handles += gh
         gauge_handles = gh
+
+    # USGS stream gauges. `stream_gauges=True` auto-fetches for the map extent,
+    # the same contract as `reference=True`.
+    if stream_gauges is not None and stream_gauges is not False:
+        sg = stream_gauges
+        if stream_gauges is True:
+            from . import streamflow as _sf
+            if clip_gdf is not None and len(clip_gdf):
+                sbnds = tuple(clip_gdf.to_crs(4326).total_bounds)
+            else:
+                sbnds = _bounds_4326(hs if hs is not None else i15da)
+            sg = _sf.stream_sites(sbnds)
+        sh, ssc = add_stream_gauges(ax, work_crs, sg, value=stream_value,
+                                    label_names=stream_labels)
+        handles += sh
+        stream_scatter = ssc
 
     # abandoned-mine features (USGS USMIN). `mines=True` auto-fetches for the
     # map extent, the same contract as `reference=True`; a GeoDataFrame or path
@@ -783,6 +1041,17 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
         caxl.yaxis.set_ticks_position("left")
         caxl.yaxis.set_label_position("left")
         cbl.set_label(resid_label, fontsize=9)
+    if stream_scatter is not None:
+        # colouring the gauges by a value without a key leaves the encoding
+        # unreadable; take the right-hand slot when there is no field bar there
+        side = "right" if im is None else "left"
+        caxs = div.append_axes(side, size="4%",
+                               pad=0.12 if im is None else 0.75)
+        cbs = fig.colorbar(stream_scatter, cax=caxs)
+        if side == "left":
+            caxs.yaxis.set_ticks_position("left")
+            caxs.yaxis.set_label_position("left")
+        cbs.set_label(stream_label or str(stream_value), fontsize=9)
     if title:
         ax.set_title(title, fontsize=12)
     # legend: "all" (every overlay), "gauges" (only the gauge marker), or off

@@ -40,8 +40,8 @@ SUBDIR = {
 }
 
 #: directories that keep their own name under the event root, unsorted.
-RESERVED = ("RainGaugeData", "nexrad_cache", "atlas14_cache", "brisk_cache",
-            "figures", "rasters", "tables", "vectors")
+RESERVED = ("RainGaugeData", "StreamGaugeData", "nexrad_cache", "atlas14_cache",
+            "brisk_cache", "figures", "rasters", "tables", "vectors")
 
 #: files that describe the whole event folder and belong at its root.
 ROOT_FILES = {"README.md", "readme.md", "NOTES.md", "notes.md"}

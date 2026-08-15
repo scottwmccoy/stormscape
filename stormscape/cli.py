@@ -17,6 +17,7 @@ climate  NOAA Atlas 14 climatology vs observed i15/i30/i60 + anomaly maps
 export   georeferenced exports for GIS/CalTopo: EPSG:3857 GeoTIFFs + GeoPDFs
 burn     near-real-time burn severity (CIMSS BRISK dNBR / BAER soil severity)
 mines    abandoned-mine features (USGS USMIN) as storm context
+flow     USGS stream gauges: discharge + stage hydrographs for the AOI
 
 The AOI is given as either ``--bbox W S E N`` (lon/lat degrees) or
 ``--aoi path`` (any vector file GeoPandas can read).
@@ -134,6 +135,7 @@ def _cmd_map(args):
                                (args.key or "i15_map") + ".png")
     drape_i15(args.hillshade, args.i15, out_path=out, work_crs="UTM",
               **_mine_kwargs(args),
+              **_stream_kwargs(args),
               cmap=args.cmap, wet_min=args.wet_min, perimeters=args.perimeters,
               basins=args.basins, highlight=args.highlight, points=args.points,
               title=args.title, basemap=args.basemap,
@@ -176,6 +178,7 @@ def _cmd_run(args):
 
     drape_i15(hs_path, i15_path, out_path=out, work_crs="UTM",
               **_mine_kwargs(args),
+              **_stream_kwargs(args),
               cmap=args.cmap, wet_min=args.wet_min, perimeters=args.perimeters,
               basins=args.basins, highlight=args.highlight, points=args.points,
               gauges=gauges_gdf,
@@ -560,6 +563,7 @@ def _cmd_zoom(args):
         out = out_path(args.out_dir, f"{key}.png")
         drape_i15(hs_da, i15_tif, out_path=out, work_crs=hs_wc,
                   **_mine_kwargs(args),
+                  **_stream_kwargs(args),
                   cmap=args.cmap, wet_min=args.wet_min,
                   perimeters=args.perimeters, basins=args.basins,
                   highlight=args.highlight, points=args.points,
@@ -986,6 +990,7 @@ def _cmd_nexrad(args):
     out_png = out_path(args.out_dir, f"{key}_nexrad.png")
     drape_i15(args.hillshade, field_tif, out_path=out_png, work_crs="UTM",
               **_mine_kwargs(args),
+              **_stream_kwargs(args),
               cmap=args.cmap, wet_min=args.wet_min, cbar_label=cbar,
               perimeters=args.perimeters, reference=args.reference,
               local_roads=args.local_roads,
@@ -1320,6 +1325,7 @@ def _cmd_burn(args):
                 if args.clip else None)
     drape_i15(hs_path, fpath, out_path=png, work_crs="UTM",
               **_mine_kwargs(args),
+              **_stream_kwargs(args),
               wet_min=wet_min, vmax=vmax, cmap=cmap, norm=norm,
               cbar_ticks=cbar_ticks, cbar_ticklabels=cbar_ticklabels,
               alpha=args.alpha, title=title, cbar_label=label,
@@ -1443,6 +1449,165 @@ def _cmd_mines(args):
     return dict(features=gdf, density=dens)
 
 
+def _cmd_flow(args):
+    """USGS stream gauges (discharge + stage) over an AOI + window.
+
+    Writes the canonical store -- gauge locations with a peak summary, plus one
+    CSV per gauge -- then the hydrographs and a map."""
+    import geopandas as gpd
+
+    from .aoi import bbox_polygon, load_aoi
+    from .plot import drape_i15, hydrograph, hydrograph_atlas
+    from .streamflow import (STREAM_SUBDIR, describe_sources, fetch_stream_event,
+                             load_event_series)
+
+    if args.list_sources:
+        describe_sources()
+        return None
+
+    aoi = _aoi_from_args(args)
+    bounds, geom = load_aoi(aoi)
+    key = args.key or "flow"
+    os.makedirs(args.out_dir, exist_ok=True)
+    start, end = _gauge_window(args)
+    print(f"window {start:%Y-%m-%d %H:%M} .. {end:%Y-%m-%d %H:%M} UTC")
+
+    summary, series = fetch_stream_event(
+        aoi, start, end, args.out_dir, key, source=args.source,
+        active_only=not args.include_inactive, api_key=args.api_key,
+        units=args.units, pad_deg=args.pad_deg, layout=args.layout)
+    if not len(summary):
+        print("no USGS stream gauges with discharge in this AOI "
+              "(widen --bbox/--aoi, or try --include-inactive)")
+        return None
+
+    qlab = "m3/s" if args.units != "cfs" else "cfs"
+    print(f"\n{len(summary)} gauge(s), {len(series)} with data in the window")
+    cols = [c for c in ("site_no", "name", "peak_discharge", "peak_stage",
+                        "rise_ratio", "report_min", "drain_area_km2")
+            if c in summary.columns]
+    show = summary.sort_values("peak_discharge", ascending=False)[cols]
+    print(show.to_string(index=False, max_colwidth=34))
+    print(f"(peak_discharge in {qlab})")
+    if "peak_at_edge" in summary.columns and summary.peak_at_edge.any():
+        edge = summary[summary.peak_at_edge.fillna(False)]
+        names = ", ".join(str(n)[:26] for n in edge.name.head(4))
+        more = f", +{len(edge) - 4} more" if len(edge) > 4 else ""
+        print(f"\nnote: {len(edge)} gauge(s) peak on the LAST observation, so "
+              f"the window cut the hydrograph while it was still rising and "
+              f"their peak reads low: {names}{more}. Extend --end.")
+
+    gpath = find(args.out_dir, f"{key}_streamgauges.geojson")
+    print(f"wrote {gpath}")
+    print(f"wrote per-gauge CSVs -> {find_subdir(args.out_dir, STREAM_SUBDIR)}")
+
+    tpath = out_path(args.out_dir, f"{key}_streamflow.csv", layout=args.layout)
+    summary.drop(columns="geometry").to_csv(tpath, index=False)
+    print(f"wrote {tpath}")
+
+    names = dict(zip(summary.site_no.astype(str), summary.name.astype(str)))
+    if not args.no_atlas and series:
+        apath = out_path(args.out_dir, f"{key}_hydrographs.png",
+                         layout=args.layout)
+        fig, _ = hydrograph_atlas(series, names=names, out_path=apath,
+                                  units=args.units, min_peak=args.min_peak,
+                                  title=args.title or
+                                  f"USGS stream gauges - {key} (UTC)")
+        if fig is None:
+            print("no gauge cleared --min-peak; atlas skipped")
+        else:
+            print(f"wrote {apath}")
+
+    if args.detail and series:
+        ddir = subdir(args.out_dir, "HydrographFigures", layout=args.layout)
+        rain = _flow_rain_series(args, key)
+        for site, df in series.items():
+            hp = os.path.join(ddir, f"{key}_hydrograph_{site}.png")
+            hydrograph(df, name=f"{names.get(site, site)}  ({site})",
+                       out_path=hp, units=args.units,
+                       rain=rain.get(site) if rain else None)
+        print(f"wrote {len(series)} hydrograph(s) -> {ddir}")
+
+    if args.no_map:
+        return dict(summary=summary, series=series)
+
+    hs_path = args.hillshade or find(args.out_dir, f"{key}_hillshade.tif")
+    if args.dem and not os.path.exists(hs_path):
+        from .dem import fetch_dem_and_hillshade
+        dem_path = out_path(args.out_dir, f"{key}_dem.tif", layout=args.layout)
+        hs_path = out_path(args.out_dir, f"{key}_hillshade.tif",
+                           layout=args.layout)
+        print(f"fetching {args.resolution} m DEM for the AOI")
+        fetch_dem_and_hillshade(aoi, resolution=args.resolution,
+                                dst_crs=args.dst_crs, dem_path=dem_path,
+                                hillshade_path=hs_path, pad_deg=args.pad_deg,
+                                resampling=getattr(args, "resampling", None))
+    if not os.path.exists(hs_path):
+        print(f"note: no hillshade at {hs_path}; skipping the map "
+              f"(pass --hillshade, or --dem to fetch one)")
+        return dict(summary=summary, series=series)
+
+    field = find(args.out_dir, f"{key}_i15max.tif") if args.i15 is None \
+        else args.i15
+    png = out_path(args.out_dir, f"{key}_streamgauges.png", layout=args.layout)
+    clip_gdf = (gpd.GeoDataFrame(geometry=[geom or bbox_polygon(bounds)], crs=4326)
+                if args.clip else None)
+    drape_i15(hs_path, field if field and os.path.exists(field) else None,
+              out_path=png, work_crs="UTM", cmap=args.cmap,
+              wet_min=args.wet_min, alpha=args.alpha,
+              title=args.title or f"USGS stream gauges - {key}",
+              stream_gauges=summary, stream_value="peak_discharge",
+              stream_labels=args.label_gauges,
+              stream_label=("peak discharge  (m$^3$ s$^{-1}$)"
+                            if args.units != "cfs"
+                            else "peak discharge  (ft$^3$ s$^{-1}$)"),
+              perimeters=args.perimeters, basins=args.basins,
+              highlight=args.highlight, points=args.points,
+              reference=args.reference, local_roads=args.local_roads,
+              label_reference=not args.no_reference_labels,
+              basemap=args.basemap, basemap_provider=args.basemap_provider,
+              basemap_labels=args.basemap_labels, basemap_zoom=args.basemap_zoom,
+              hillshade_alpha=args.hillshade_alpha,
+              clip=clip_gdf, clip_margin=args.clip_margin,
+              north_arrow=True, scale_ticks=True, dpi=args.dpi,
+              **_mine_kwargs(args))
+    print(f"wrote {png}")
+    _save_event_aoi(args, args.out_dir, key)
+    return dict(summary=summary, series=series)
+
+
+def _flow_rain_series(args, key):
+    """Rain-gauge series to draw as a hyetograph over each hydrograph, if the
+    event folder already has a rain-gauge store. Absent one, returns None --
+    the hydrograph is still worth drawing on its own."""
+    if not args.rain:
+        return None
+    try:
+        from .gauges import load_event_series as _rain_series
+        import geopandas as gpd
+        gp = find(args.out_dir, f"{args.rain_key or key}_gauges.geojson")
+        if not os.path.exists(gp):
+            print(f"note: --rain given but no rain-gauge store at {gp}")
+            return None
+        rg = gpd.read_file(gp)
+        series = _rain_series(find_subdir(args.out_dir, "RainGaugeData"),
+                              args.rain_key or key, rg)
+    except Exception as e:                                     # noqa: BLE001
+        print(f"note: could not load rain gauges for the hyetograph: {e}")
+        return None
+    if not series:
+        return None
+    # nearest rain gauge to each stream gauge would need the stream geometry
+    # here; the common case is one storm over a small AOI, so the wettest gauge
+    # is the honest default and the panel title says which.
+    import pandas as pd
+    best = max(series.items(),
+               key=lambda kv: float(pd.to_numeric(
+                   kv[1].get("i15_mmph", pd.Series([0])), errors="coerce").max()
+                   or 0))
+    return {s: best[1] for s in series}
+
+
 def _cmd_export(args):
     """Georeferenced exports for GIS / CalTopo from an already-processed event:
     EPSG:3857 GeoTIFFs of the rainfall fields (raw float + colorized RGBA) and
@@ -1539,6 +1704,7 @@ def _cmd_export(args):
             fig, ax = drape_i15(
                 hs_da, i15_tif, out_path=None, work_crs=hs_wc, cmap=args.cmap,
                 **_mine_kwargs(args),
+                **_stream_kwargs(args),
                 wet_min=args.wet_min, perimeters=args.perimeters,
                 basins=args.basins, highlight=args.highlight, points=args.points,
                 gauges=gauges_gdf,
@@ -1972,6 +2138,27 @@ def _add_overlays(p):
                    help="output figure resolution (default 200)")
 
 
+def _add_stream_overlay_opts(p):
+    """`--stream-gauges` overlay knobs, shared by the map-drawing subcommands."""
+    p.add_argument("--stream-gauges", action="store_true",
+                   help="auto-fetch + overlay USGS stream gauges (blue squares) "
+                        "for the map extent")
+    p.add_argument("--stream-value", default=None, metavar="COL",
+                   help="colour the gauges by a column of the flow summary "
+                        "(e.g. peak_discharge); plain markers if omitted")
+    p.add_argument("--stream-labels", action="store_true",
+                   help="label the stream gauges")
+
+
+def _stream_kwargs(args):
+    """drape_i15 stream-gauge kwargs from parsed args (empty when off)."""
+    if not getattr(args, "stream_gauges", False):
+        return {}
+    return dict(stream_gauges=True,
+                stream_value=getattr(args, "stream_value", None),
+                stream_labels=getattr(args, "stream_labels", False))
+
+
 def _add_mine_overlay_opts(p):
     """`--mines` overlay knobs, shared by the map-drawing subcommands."""
     p.add_argument("--mines", action="store_true",
@@ -2081,6 +2268,7 @@ def main(argv=None):
     _add_layout(pm)                     # only bites when --out is not given
     _add_overlays(pm)
     _add_mine_overlay_opts(pm)
+    _add_stream_overlay_opts(pm)
     pm.set_defaults(func=_cmd_map)
 
     pr = sub.add_parser("run", help="DEM -> hillshade -> i15 -> figure")
@@ -2098,6 +2286,7 @@ def main(argv=None):
                     help="also fetch gauge-corrected MultiSensor QPE total")
     _add_overlays(pr)
     _add_mine_overlay_opts(pr)
+    _add_stream_overlay_opts(pr)
     _add_gauge_opts(pr)
     pr.add_argument("--gauges", action="store_true",
                     help="fetch Synoptic rain gauges + overlay them on the figure")
@@ -2221,6 +2410,7 @@ def main(argv=None):
                     metavar="MIN", help="gauge peak-intensity durations, minutes")
     _add_overlays(pn)
     _add_mine_overlay_opts(pn)
+    _add_stream_overlay_opts(pn)
     pn.set_defaults(func=_cmd_nexrad)
 
     pp = sub.add_parser("panels",
@@ -2346,6 +2536,7 @@ def main(argv=None):
     _add_climate_opts(pz)              # climate knobs (--ari/--durations/--obs-smooth…)
     _add_overlays(pz)                  # note: zoom always clips to the sub-AOI
     _add_mine_overlay_opts(pz)
+    _add_stream_overlay_opts(pz)
     pz.set_defaults(func=_cmd_zoom)
 
     pk = sub.add_parser("pick",
@@ -2450,6 +2641,7 @@ def main(argv=None):
                          "network incl. unnamed headwaters)")
     _add_overlays(pe)
     _add_mine_overlay_opts(pe)
+    _add_stream_overlay_opts(pe)
     pe.set_defaults(func=_cmd_export)
 
     prc = sub.add_parser("recurrence",
@@ -2591,6 +2783,7 @@ def main(argv=None):
                     help="write the rasters and table only, no figure")
     _add_overlays(pb)
     _add_mine_overlay_opts(pb)
+    _add_stream_overlay_opts(pb)
     pb.add_argument("--continuous", action="store_true",
                     help="shade dNBR as a continuous ramp instead of banding it "
                          "into the severity classes BAER publishes (same colours)")
@@ -2663,6 +2856,65 @@ def main(argv=None):
     # _add_overlays would mis-scale it. Mask cells holding no features, and keep
     # the ramp warm so it cannot be mistaken for the rain field on a neighbour.
     pmn.set_defaults(func=_cmd_mines, cmap="YlOrBr", wet_min=0.5)
+
+    pfl = sub.add_parser(
+        "flow",
+        help="USGS stream gauges: discharge + stage hydrographs for the AOI",
+        description="Pull the USGS stream gauges inside an AOI and plot what "
+                    "came down the channel, against the rain that produced it. "
+                    "Discharge and gage height are read from USGS Water "
+                    "Services (--source ogc switches to the modernized API "
+                    "that replaces it; --list-sources for both).")
+    _add_aoi(pfl)
+    pfl.add_argument("--date", help="storm day YYYYMMDD (scans the local day)")
+    _add_window_opts(pfl)
+    pfl.add_argument("--source", default="nwis", choices=["nwis", "ogc"],
+                     help="nwis = legacy Water Services (default, no key); "
+                          "ogc = the modernized replacement API")
+    pfl.add_argument("--api-key", default=None,
+                     help="USGS API key for --source ogc (else "
+                          "$STORMSCAPE_USGS_API_KEY). Optional: anonymous is "
+                          "100 requests/hour, which is ample here")
+    pfl.add_argument("--list-sources", action="store_true",
+                     help="list the USGS sources and stop")
+    pfl.add_argument("--units", default="si", choices=["si", "cfs"],
+                     help="si = m3/s and m (default, matching the rest of "
+                          "stormscape); cfs = ft3/s and ft, as USGS publishes. "
+                          "Both are always written to the CSVs either way")
+    pfl.add_argument("--include-inactive", action="store_true",
+                     help="include discontinued gauges (for historical events)")
+    pfl.add_argument("--min-peak", type=float, default=None,
+                     help="drop gauges peaking below this from the atlas "
+                          "(in the chosen --units); an AOI full of irrigation "
+                          "drains otherwise buries the rivers")
+    pfl.add_argument("--detail", action="store_true",
+                     help="one full-size hydrograph per gauge -> "
+                          "HydrographFigures/")
+    pfl.add_argument("--rain", action="store_true",
+                     help="with --detail, draw the event's rain gauge as an "
+                          "inverted hyetograph above each hydrograph (needs a "
+                          "rain-gauge store from `gauges` in the same folder)")
+    pfl.add_argument("--rain-key", default=None,
+                     help="key of the rain-gauge store for --rain (default: "
+                          "the same --key)")
+    pfl.add_argument("--no-atlas", action="store_true",
+                     help="skip the multi-gauge hydrograph atlas")
+    pfl.add_argument("--label-gauges", action="store_true",
+                     help="label the gauges on the map")
+    pfl.add_argument("--i15", default=None,
+                     help="rainfall field to drape under the gauges (default: "
+                          "<key>_i15max.tif if the event has one)")
+    pfl.add_argument("--hillshade", help="hillshade tif for the map backdrop")
+    pfl.add_argument("--dem", action="store_true",
+                     help="fetch a DEM + hillshade for the AOI if none is found")
+    pfl.add_argument("--resolution", type=int, default=10,
+                     help="DEM resolution for --dem (default 10 m)")
+    _add_dem_opts(pfl)
+    pfl.add_argument("--no-map", action="store_true",
+                     help="write the store, table and hydrographs only")
+    _add_overlays(pfl)
+    _add_mine_overlay_opts(pfl)
+    pfl.set_defaults(func=_cmd_flow)
 
     args = ap.parse_args(argv)
     # One switch for the whole process rather than threading `layout=` through
