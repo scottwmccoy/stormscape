@@ -28,7 +28,10 @@ shapely geometry) and, for rainfall, a **storm-day date**, it will:
    `stormscape.nexrad`);
 6. **Map near-real-time burn severity** over the same AOI from **CIMSS BRISK**
    daily multi-satellite dNBR — so a scar can be put under the rain while the
-   fire is still burning (`stormscape.burn`).
+   fire is still burning (`stormscape.burn`);
+7. **Overlay abandoned-mine features** — USGS **USMIN** dumps, tailings, adits
+   and shafts — as points or a per-km² density surface, so historic mining sits
+   under the storm alongside the scar (`stormscape.mines`).
 
 It was lifted out of a post-fire debris-flow study and generalized: nothing
 here is tied to that project's fire perimeters or event inventory — you supply
@@ -623,6 +626,79 @@ after that it is instant.
 > adjusted by field crews for hydrophobicity, ground cover and duff consumption.
 > BRISK is explicitly **interim**: use it to act early, then supersede it with
 > `--product sbs` when the BAER assessment lands.
+
+---
+
+### Abandoned mine features (USGS USMIN)
+
+`mines` puts historic mining on the same map as the rain. In the Great Basin the
+steep catchments that produce debris flows are full of it, and **mine dumps and
+tailings** are loose, often fine-grained, sometimes contaminated material sitting
+on or near the channel network — exactly what a convective cell mobilises.
+
+```bash
+# dumps, tailings, adits and shafts over an AOI
+python -m stormscape mines --aoi event_AOI.kmz --out-dir ./out --key event \
+    --dem --reference --clip
+```
+
+```bash
+# just the waste, as a density surface instead of a smear of markers
+python -m stormscape mines --aoi event_AOI.kmz --out-dir ./out --key event \
+    --kinds waste --mines-mode density --density-group waste --cell-km 1
+```
+
+That writes `event_mines.geojson` (the features), `event_mine_classes.csv` (a
+per-group tally naming the feature types actually present), `event_mine_density.tif`
+(features per km², EPSG:5070), and `event_mines.png`.
+
+The figure carries **one** encoding of the data — the features themselves, over
+terrain. The density raster is written as a GIS layer but not draped, since
+blocky per-km² cells underneath graduated symbols of the same counts show the
+reader one quantity twice; `--density-map` drapes it anyway if you want it.
+
+Any map command can carry the layer as an overlay — `--mines` auto-fetches for the
+map extent exactly as `--reference` does for streams and roads:
+
+```bash
+python -m stormscape run --aoi event_AOI.kmz --date 20260619 --out-dir ./out \
+    --key event --reference --clip --mines --mines-kinds waste
+```
+
+**Choosing what to plot.** USMIN's vocabulary is 55 feature types, most of them
+noise here — two-thirds of the features over a typical Nevada AOI are prospect
+pits. `--kinds` takes six groups (`waste`, `openings`, `surface`, `aggregate`,
+`prospect`, `other`), exact feature types (`--kinds "Mine Dump" "Tailings - Pond"`),
+or `all`. The default is `waste openings`. The filter is pushed into the service
+query where it can be, so a narrow selection is cheap, and prefix families mean a
+subtype USMIN adds later (`Tailings - Anything`) still lands in `waste`.
+
+**Density instead of points.** Over a mining district individual markers merge into
+a smear. `--mines-mode density` bins features onto an equal-area grid and sizes one
+symbol per cell by the count (marker *area* ∝ count), with a size key in the legend;
+`--mines-mode auto` switches over automatically past ~400 features. Restrict the
+count to one class with `--density-group` — mixing dumps and prospect pits into a
+single density number is not a meaningful quantity.
+
+> **This is a historical map compilation, not a hazard inventory.** A feature is
+> where a topographer drew a symbol on a sheet dated 1950–1994 (`topo_date`). There
+> is no hazard ranking, no securing status, no confirmation the feature still
+> exists, and nothing mined after the last map revision.
+>
+> **There is no public point-level abandoned-mine hazard database, by policy.** USGS
+> [Fact Sheet 2025-3003](https://doi.org/10.3133/fs20253003) says the national
+> abandoned-mine-feature database being built under USMIN "will not publish specific
+> location information of any abandoned mine workings" — the locations could be used
+> to enter hazardous workings or vandalise historic structures — and will release
+> only aggregated derivatives. Nevada matches: the **Division of Minerals**' AML
+> layers exist but every one answers `499 Token Required` anonymously. What *is*
+> public is USMIN's topo-sheet compilation, which reveals nothing the printed maps
+> did not.
+
+`--list-sources` shows the registry and whether each source is reachable. A
+credentialed feed is a source entry, not a code change: NDOM is already registered
+with its service URLs and a `$STORMSCAPE_NDOM_TOKEN` hook, so `--source ndom
+--token …` is all that is needed once access lands.
 
 ---
 

@@ -555,6 +555,68 @@ python -m stormscape burn --aoi event_AOI.kmz --date 20260814 \
 
 ---
 
+### `mines` — abandoned-mine features (USGS USMIN)
+
+Maps historic mine features — **dumps, tailings, adits, shafts** — as storm
+context. Source is **USGS USMIN**, mine symbols digitised from published 7.5- and
+15-minute topographic sheets, served live and nationally (Nevada alone carries
+121,193 point features; every western state is covered).
+
+> **A historical map compilation, not a hazard inventory.** A feature is where a
+> topographer drew a symbol on a sheet dated 1950–1994 (`topo_date`) — no hazard
+> ranking, no securing status, no confirmation it still exists.
+>
+> **No public point-level abandoned-mine hazard database exists, by policy.** USGS
+> [FS 2025-3003](https://doi.org/10.3133/fs20253003) withholds specific locations
+> of abandoned workings from the national inventory; Nevada's Division of Minerals
+> AML layers answer `499 Token Required` anonymously. See `--list-sources`.
+
+Groups **A + C**, plus:
+| Arg | Type / default | Meaning |
+|---|---|---|
+| `--kinds KIND…` | `waste openings` | groups (`waste`, `openings`, `surface`, `aggregate`, `prospect`, `other`), exact feature types (`"Mine Dump"`), or `all`. Pushed into the service query where expressible |
+| `--geometry {both,points,areas}` | `both` | which USMIN layer(s) to read. **Keep `both`**: dumps and tailings are almost all polygons (14,815 vs 413 points nationally), so `points` makes a waste query look like an empty AOI |
+| `--source KEY` | `usmin` | source registry key; `--list-sources` to see all |
+| `--token TOKEN` | str | ArcGIS token for a gated source (prefer the source's env var so it stays out of shell history) |
+| `--list-sources` | flag | list known sources, whether each is public, and stop |
+| `--named-only` | flag | keep only features named on the topo sheet |
+| `--cell-km KM` | float, `1.0` | density cell size (1 km ⇒ features per km²) |
+| `--density-group GROUP` | str | count only this group in the density raster/symbols |
+| `--mines-mode {auto,points,density}` | `points` | overlay style on the figure |
+| `--mines-labels` | flag | label named features |
+| `--density-map` | flag | also drape the per-km² raster behind the features. Off by default — with `--mines-mode density` it draws the same counts twice. `--cmap`/`--wet-min`/`--vmax` apply to that field |
+| `--hillshade` | path | hillshade for the map backdrop |
+| `--dem` | flag | fetch a DEM + hillshade for the AOI if none is found |
+| `--no-map` | flag | write the layer, table and raster only |
+
+The same layer is available as an **overlay on any map-drawing command** (`map`,
+`run`, `nexrad`, `zoom`, `burn`, `export`) — `--mines` auto-fetches for the map
+extent the way `--reference` does, with `--mines-kinds`, `--mines-mode`,
+`--mines-cell-km`, `--mines-group` and `--mines-labels`. (The residual maps from
+`compare` / `run --compare` are deliberately left clean.)
+
+Over a mining district, individual markers merge into a smear; `--mines-mode
+density` bins onto an equal-area grid and sizes one symbol per cell by count
+(marker *area* ∝ count, with a size key in the legend), and `auto` switches over
+past ~400 features. Restrict a density count to a single class with
+`--density-group` — mixing dumps and prospect pits into one number is meaningless.
+
+```bash
+# dumps, tailings, adits and shafts over an AOI
+python -m stormscape mines --aoi event_AOI.kmz --out-dir ./out --key event \
+    --dem --reference --clip
+
+# just the waste, as a density surface
+python -m stormscape mines --aoi event_AOI.kmz --out-dir ./out --key event \
+    --kinds waste --mines-mode density --density-group waste
+
+# or as an overlay on the storm map
+python -m stormscape run --aoi event_AOI.kmz --date 20260619 --out-dir ./out \
+    --key event --reference --clip --mines --mines-kinds waste
+```
+
+---
+
 ## Outputs at a glance
 
 | Command | Writes |
@@ -574,3 +636,4 @@ python -m stormscape burn --aoi event_AOI.kmz --date 20260814 \
 | `smooth` | `<key>_smoothing_compare.png`; with `--gauge-analysis` also `<key>_smoothing_skill.png` + `.csv`; with `--write` smoothed `<key>_<field>.tif` |
 | `recurrence` | `<key>_gauge_recurrence.csv` + `.md` (per wet gauge: peak I15/30/60, time-of-peak, anomaly, recurrence interval) |
 | `export` | `<key>_<field>_3857.tif` (raw) + `_3857_rgb.tif` (colorized) per `--layers`; `<key>.pdf` + `<key>_anom_i{d}.pdf` GeoPDFs (needs `libgdal-pdf`); with `--streams`, `<key>_streams.geojson` (NHD network) |
+| `mines` | `<key>_mines.geojson` (features + group), `<key>_mine_classes.csv` (per-group tally + the types present), `<key>_mine_density.tif` (features per km², EPSG:5070), `<key>_mines.png` |

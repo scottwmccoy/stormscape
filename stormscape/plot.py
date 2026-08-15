@@ -243,6 +243,134 @@ def add_gauges(ax, work_crs, gauges, value=None, cmap="turbo", vmin=None,
     return handles, sc
 
 
+#: per-group mine styling. Colours are Okabe-Ito derived (colourblind-safe) and
+#: deliberately warm/neutral so they read against the cool YlGnBu rainfall drape
+#: without colliding with streams (blue), roads (grey) or gauges (yellow).
+MINE_STYLE = {
+    "waste":     dict(color="#D55E00", marker="s", label="mine waste"),
+    "openings":  dict(color="#CC79A7", marker="v", label="adit / shaft"),
+    "surface":   dict(color="#8C510A", marker="D", label="open working"),
+    "aggregate": dict(color="#999999", marker="o", label="aggregate pit"),
+    "prospect":  dict(color="#666666", marker=".", label="prospect"),
+    "other":     dict(color="#009E73", marker="P", label="mine feature"),
+}
+
+#: above this many features, ``mode="auto"`` switches to a density map -- past
+#: roughly this count the individual markers merge into a smear anyway.
+MINE_DENSITY_SWITCH = 400
+
+
+def _mine_size_legend(ax, counts, smax, cell_km, color):
+    """Legend handles showing what a graduated density symbol means.
+
+    A graduated symbol is unreadable without a key, so pick three round-ish
+    reference counts spanning the data and draw one marker each at the size the
+    map actually uses.
+    """
+    import numpy as np
+
+    hi = int(np.nanmax(counts))
+    refs = sorted({1, max(1, hi // 3), hi}) if hi > 1 else [1]
+    unit = "km$^2$" if float(cell_km) == 1.0 else f"({cell_km:g} km)$^2$"
+    return [Line2D([], [], marker="o", lw=0, mfc=color, mec="black", mew=0.6,
+                   alpha=0.75,
+                   markersize=max(3.0, (smax * n / hi) ** 0.5),
+                   label=f"{n} per {unit}") for n in refs]
+
+
+def add_mines(ax, work_crs, mines, mode="auto", cell_km=1.0, groups=None,
+              size=26, density_max_size=340, label_names=False, alpha=0.9,
+              max_labels=12):
+    """Overlay abandoned-mine features, as markers or as a density surface.
+
+    ``mines`` is a GeoDataFrame (from
+    :func:`stormscape.mines.mine_features`) or a vector path; it is reprojected
+    to ``work_crs``. Returns legend handles.
+
+    Two ways to draw it, because a mining district defeats one of them:
+
+    ``mode="points"``
+        Every feature, styled by its ``group`` column (see :data:`MINE_STYLE`).
+        Polygon features -- which is how USMIN records most dumps and tailings
+        -- are drawn as their actual footprints rather than reduced to dots, so
+        the extent of a tailings pile reads at map scale.
+    ``mode="density"``
+        Features binned onto an equal-area grid and drawn as one graduated
+        symbol per cell, sized by count (marker *area* is proportional to
+        count, which is what matplotlib's ``s`` controls). Use ``groups=`` to
+        count a single class; mixing dumps and prospect pits into one density
+        number is not a meaningful quantity.
+    ``mode="auto"`` (default)
+        Points up to :data:`MINE_DENSITY_SWITCH` features, density beyond.
+    """
+    import numpy as np
+
+    from .mines import GROUPS, density_grid
+
+    g = read_overlay(mines, work_crs)
+    handles = []
+    if g is None or not len(g):
+        return handles
+    if groups is not None and "group" in g.columns:
+        want = {groups} if isinstance(groups, str) else set(groups)
+        g = g[g.group.isin({str(w).lower() for w in want})]
+        if not len(g):
+            return handles
+
+    if mode == "auto":
+        mode = "density" if len(g) > MINE_DENSITY_SWITCH else "points"
+
+    if mode == "density":
+        # bin in 4326 (density_grid reprojects to equal-area internally), then
+        # bring the cell centres into the map projection
+        cells = density_grid(g.to_crs(4326), cell_km=cell_km)
+        if not len(cells):
+            return handles
+        cells = cells.to_crs(work_crs)
+        n = cells["count"].to_numpy(dtype="float64")
+        sizes = np.clip(density_max_size * n / n.max(), 8.0, density_max_size)
+        only = (list(groups) if isinstance(groups, (list, tuple, set))
+                else [groups] if groups else None)
+        color = (MINE_STYLE.get(str(only[0]).lower(), MINE_STYLE["other"])["color"]
+                 if only and len(only) == 1 else "#D55E00")
+        ax.scatter(cells.geometry.x, cells.geometry.y, s=sizes,
+                   facecolor=color, edgecolor="black", linewidth=0.6,
+                   alpha=0.75, zorder=5.6)
+        handles += _mine_size_legend(ax, n, density_max_size, cell_km, color)
+        return handles
+
+    # --- individual features -------------------------------------------------
+    order = [k for k in GROUPS if k in set(g.get("group", []))]
+    for grp in order or ["other"]:
+        sub = g[g.group == grp] if "group" in g.columns else g
+        if not len(sub):
+            continue
+        st = MINE_STYLE.get(grp, MINE_STYLE["other"])
+        polys = sub[sub.geom_type.isin(("Polygon", "MultiPolygon"))]
+        pts = sub[~sub.index.isin(polys.index)]
+        if len(polys):                       # real footprints, not dots
+            polys.plot(ax=ax, facecolor=st["color"], edgecolor="black",
+                       linewidth=0.5, alpha=min(1.0, alpha * 0.55), zorder=5.4)
+            polys.boundary.plot(ax=ax, color=st["color"], linewidth=0.8,
+                                zorder=5.5)
+        if len(pts):
+            ax.scatter(pts.geometry.x, pts.geometry.y, marker=st["marker"],
+                       s=size if st["marker"] != "." else size * 0.5,
+                       facecolor=st["color"], edgecolor="black",
+                       linewidth=0.5, alpha=alpha, zorder=5.5)
+        handles.append(Line2D([], [], marker=st["marker"], color=st["color"],
+                              mec="black", lw=0, markersize=7,
+                              label=f"{st['label']} ({len(sub)})"))
+    if label_names and "name" in g.columns:
+        named = g[g.name.notna()]
+        # polygons have no .x/.y; a representative point is guaranteed inside
+        for _, row in named.head(max_labels).iterrows():
+            geom = row.geometry
+            p = geom if geom.geom_type == "Point" else geom.representative_point()
+            _label_point(ax, p.x, p.y, str(row["name"]), 5.5)
+    return handles
+
+
 def _add_north_arrow(ax, x=0.07, y=0.90):
     """A simple up-pointing north arrow with an 'N' label (axes fraction)."""
     import matplotlib.patheffects as pe
@@ -346,6 +474,8 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
               perimeters=None, basins=None, highlight=None, points=None,
               gauges=None, gauge_value=None, gauge_cmap=None, gauge_vmax=None,
               gauge_label=None,
+              mines=None, mines_mode="auto", mines_kinds=None,
+              mines_cell_km=1.0, mines_groups=None, mines_labels=False,
               title=None, cbar_label=None, figsize=(9, 8.5), dpi=200,
               basemap=False, basemap_provider="USGS.USTopo",
               basemap_labels=None, basemap_zoom=None, hillshade_alpha=None,
@@ -392,6 +522,14 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
         (from :func:`stormscape.compare.radar_vs_gauge`) uses a diverging
         radar-minus-gauge scale with its own colour bar. ``gauge_cmap`` /
         ``gauge_vmax`` / ``gauge_label`` override the defaults.
+    mines, mines_mode, mines_kinds, mines_cell_km, mines_groups, mines_labels
+        Abandoned-mine overlay (see :func:`add_mines`). ``mines=True``
+        auto-fetches USGS **USMIN** features for the map extent, exactly as
+        ``reference=True`` does for streams and roads; a GeoDataFrame or path
+        is drawn as given. ``mines_kinds`` selects feature groups for that
+        fetch (default ``waste`` + ``openings``), ``mines_mode`` is
+        ``"auto"``/``"points"``/``"density"``, and ``mines_groups`` restricts
+        what a density map counts.
     north_arrow, scale_ticks, legend
         Cartographic touches: ``north_arrow=True`` draws an up-arrow + "N";
         ``scale_ticks=True`` replaces the blank axes with distance tick marks
@@ -473,26 +611,36 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
                                   power=smooth_power)
         return da
 
+    # `i15=None` draws terrain + overlays only, with no field and no colour bar.
+    # A map whose subject is the vectors (mine features, stream network) should
+    # not also carry a raster encoding of the same thing -- drawn both ways at
+    # once, the reader sees one quantity twice and neither clearly.
+    field = i15 is not None
     if hillshade is not None:
         hs0 = _load(hillshade)
         if str(work_crs).strip().upper() in ("UTM", "AUTO"):
             work_crs = _utm_crs_for(hs0)     # auto UTM zone -> near north-up
         hs = _to_crs(hs0, work_crs)
-        i15da = _to_crs(_load_i15(), work_crs).rio.reproject_match(hs)
-    else:                          # no terrain: show the i15 field on its own grid
+        i15da = (_to_crs(_load_i15(), work_crs).rio.reproject_match(hs)
+                 if field else None)
+    elif field:                    # no terrain: show the i15 field on its own grid
         i150 = _load_i15()
         if str(work_crs).strip().upper() in ("UTM", "AUTO"):
             work_crs = _utm_crs_for(i150)
         hs = None
         i15da = _to_crs(i150, work_crs)
-    i15v = np.nan_to_num(i15da.values)
-    if i15v.ndim == 3:
-        i15v = i15v[0]
-    i15m = np.ma.masked_less(i15v, wet_min)
-    if vmax is None and norm is None:
-        finite = i15da.values[np.isfinite(i15da.values)]
-        vmax = max(float(np.percentile(finite, 99)) if finite.size else 10.0,
-                   10.0)
+    else:
+        raise ValueError("drape_i15 needs a hillshade, a field, or both")
+    i15m = None
+    if field:
+        i15v = np.nan_to_num(i15da.values)
+        if i15v.ndim == 3:
+            i15v = i15v[0]
+        i15m = np.ma.masked_less(i15v, wet_min)
+        if vmax is None and norm is None:
+            finite = i15da.values[np.isfinite(i15da.values)]
+            vmax = max(float(np.percentile(finite, 99)) if finite.size else 10.0,
+                       10.0)
     ext = _extent(hs if hs is not None else i15da)
 
     # optional tighter view: clip the axes to a geometry's extent (+ margin)
@@ -521,9 +669,9 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
     # a norm (e.g. the BoundaryNorm behind a classed burn-severity map) replaces
     # the linear vmin/vmax scale rather than fighting with it
     scale_kw = dict(norm=norm) if norm is not None else dict(vmin=0, vmax=vmax)
-    im = ax.imshow(i15m, cmap=cmap, extent=ext, origin="upper",
-                   alpha=i15_alpha, zorder=1,
-                   interpolation="nearest", **scale_kw)
+    im = (ax.imshow(i15m, cmap=cmap, extent=ext, origin="upper",
+                    alpha=i15_alpha, zorder=1,
+                    interpolation="nearest", **scale_kw) if field else None)
     _apply_clip()                      # set view before any basemap tile fetch
     if basemap:
         _add_basemap(ax, work_crs,
@@ -581,6 +729,23 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
         handles += gh
         gauge_handles = gh
 
+    # abandoned-mine features (USGS USMIN). `mines=True` auto-fetches for the
+    # map extent, the same contract as `reference=True`; a GeoDataFrame or path
+    # is drawn as given.
+    if mines is not None and mines is not False:
+        mine_gdf = mines
+        if mines is True:
+            from . import mines as mines_mod
+            if clip_gdf is not None and len(clip_gdf):
+                mbnds = tuple(clip_gdf.to_crs(4326).total_bounds)
+            else:
+                mbnds = _bounds_4326(hs)
+            mine_gdf = mines_mod.mine_features(
+                mbnds, kinds=mines_kinds or mines_mod.DEFAULT_KINDS)
+        handles += add_mines(ax, work_crs, mine_gdf, mode=mines_mode,
+                             cell_km=mines_cell_km, groups=mines_groups,
+                             label_names=mines_labels)
+
     # vector reference layers (NHD streams / TIGER roads / GNIS places)
     if reference and streams is None and roads is None and places is None:
         from . import refdata
@@ -602,15 +767,16 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
     # of the figure aspect, so a tall narrow UTM map doesn't strand them)
     from mpl_toolkits.axes_grid1 import make_axes_locatable
     div = make_axes_locatable(ax)
-    cax = div.append_axes("right", size="4%", pad=0.12)
-    cb = fig.colorbar(im, cax=cax,
-                      **(dict(ticks=cbar_ticks) if cbar_ticks is not None
-                         else {}))
-    if cbar_ticklabels is not None:      # e.g. severity class names, not numbers
-        cb.ax.set_yticklabels(cbar_ticklabels, fontsize=9)
-    cb.set_label(cbar_label or
-                 "peak 15-min rainfall intensity  i$_{15}$  (mm h$^{-1}$)",
-                 fontsize=10)
+    if im is not None:
+        cax = div.append_axes("right", size="4%", pad=0.12)
+        cb = fig.colorbar(im, cax=cax,
+                          **(dict(ticks=cbar_ticks) if cbar_ticks is not None
+                             else {}))
+        if cbar_ticklabels is not None:  # e.g. severity class names, not numbers
+            cb.ax.set_yticklabels(cbar_ticklabels, fontsize=9)
+        cb.set_label(cbar_label or
+                     "peak 15-min rainfall intensity  i$_{15}$  (mm h$^{-1}$)",
+                     fontsize=10)
     if resid_scatter is not None:        # diverging radar-minus-gauge bar, left
         caxl = div.append_axes("left", size="4%", pad=0.75)
         cbl = fig.colorbar(resid_scatter, cax=caxl)

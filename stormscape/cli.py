@@ -15,6 +15,8 @@ zoom     re-render an existing event's figures clipped to a sub-AOI (no re-run)
 pick     interactive browser bbox picker: drag a zoom box on an event's map
 climate  NOAA Atlas 14 climatology vs observed i15/i30/i60 + anomaly maps
 export   georeferenced exports for GIS/CalTopo: EPSG:3857 GeoTIFFs + GeoPDFs
+burn     near-real-time burn severity (CIMSS BRISK dNBR / BAER soil severity)
+mines    abandoned-mine features (USGS USMIN) as storm context
 
 The AOI is given as either ``--bbox W S E N`` (lon/lat degrees) or
 ``--aoi path`` (any vector file GeoPandas can read).
@@ -29,6 +31,7 @@ import sys
 
 from .export import DEFAULT_EXPORT_FIELDS
 from .layout import find, find_subdir, out_path, subdir
+from .mines import DEFAULT_KINDS as _MINE_DEFAULT_KINDS
 
 
 def _aoi_from_args(args):
@@ -130,6 +133,7 @@ def _cmd_map(args):
     out = args.out or out_path(args.out_dir or ".",
                                (args.key or "i15_map") + ".png")
     drape_i15(args.hillshade, args.i15, out_path=out, work_crs="UTM",
+              **_mine_kwargs(args),
               cmap=args.cmap, wet_min=args.wet_min, perimeters=args.perimeters,
               basins=args.basins, highlight=args.highlight, points=args.points,
               title=args.title, basemap=args.basemap,
@@ -171,6 +175,7 @@ def _cmd_run(args):
             print(f"no gauges found in AOI for {start} to {end}")
 
     drape_i15(hs_path, i15_path, out_path=out, work_crs="UTM",
+              **_mine_kwargs(args),
               cmap=args.cmap, wet_min=args.wet_min, perimeters=args.perimeters,
               basins=args.basins, highlight=args.highlight, points=args.points,
               gauges=gauges_gdf,
@@ -554,6 +559,7 @@ def _cmd_zoom(args):
         gauges_gdf = gpd.read_file(gpath) if have_gauges else None
         out = out_path(args.out_dir, f"{key}.png")
         drape_i15(hs_da, i15_tif, out_path=out, work_crs=hs_wc,
+                  **_mine_kwargs(args),
                   cmap=args.cmap, wet_min=args.wet_min,
                   perimeters=args.perimeters, basins=args.basins,
                   highlight=args.highlight, points=args.points,
@@ -979,6 +985,7 @@ def _cmd_nexrad(args):
 
     out_png = out_path(args.out_dir, f"{key}_nexrad.png")
     drape_i15(args.hillshade, field_tif, out_path=out_png, work_crs="UTM",
+              **_mine_kwargs(args),
               cmap=args.cmap, wet_min=args.wet_min, cbar_label=cbar,
               perimeters=args.perimeters, reference=args.reference,
               local_roads=args.local_roads,
@@ -1312,6 +1319,7 @@ def _cmd_burn(args):
     clip_gdf = (gpd.GeoDataFrame(geometry=[geom or bbox_polygon(bounds)], crs=4326)
                 if args.clip else None)
     drape_i15(hs_path, fpath, out_path=png, work_crs="UTM",
+              **_mine_kwargs(args),
               wet_min=wet_min, vmax=vmax, cmap=cmap, norm=norm,
               cbar_ticks=cbar_ticks, cbar_ticklabels=cbar_ticklabels,
               alpha=args.alpha, title=title, cbar_label=label,
@@ -1327,6 +1335,112 @@ def _cmd_burn(args):
     print(f"wrote {png}")
     _save_event_aoi(args, args.out_dir, key)
     return res
+
+
+def _cmd_mines(args):
+    """Abandoned-mine features (USGS USMIN) over an AOI.
+
+    Writes the vector layer, a per-group tally, a features-per-km^2 density
+    raster, and a map."""
+    import geopandas as gpd
+
+    from .aoi import bbox_polygon, load_aoi
+    from .mines import (GROUPS, density_raster, describe_sources, group_counts,
+                        mine_features)
+    from .mrms import save_fields
+    from .plot import drape_i15
+
+    if args.list_sources:
+        describe_sources()
+        return None
+
+    aoi = _aoi_from_args(args)
+    bounds, geom = load_aoi(aoi)
+    key = args.key or "mines"
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    gdf = mine_features(aoi, kinds=args.kinds, geometry=args.geometry,
+                        source=args.source, named_only=args.named_only,
+                        token=args.token, pad_deg=args.pad_deg)
+    if not len(gdf):
+        print(f"no mine features in this AOI for kinds={args.kinds!r} "
+              f"(source {args.source}). Widen --kinds, or try --kinds all.")
+        return None
+
+    print(f"\n{len(gdf)} mine feature(s) from {args.source}  "
+          f"({gdf.geom_kind.value_counts().to_dict()})")
+    tbl = group_counts(gdf)
+    print(tbl.to_string(index=False))
+
+    gpath = out_path(args.out_dir, f"{key}_mines.geojson", layout=args.layout)
+    gdf.to_file(gpath, driver="GeoJSON")
+    print(f"wrote {gpath}")
+
+    tpath = out_path(args.out_dir, f"{key}_mine_classes.csv", layout=args.layout)
+    tbl.to_csv(tpath, index=False)
+    print(f"wrote {tpath}")
+
+    dens = density_raster(gdf, bounds, cell_km=args.cell_km,
+                          groups=args.density_group)
+    for dp in save_fields(dens, args.out_dir, key, layout=args.layout):
+        print(f"wrote {dp}")
+    print(f"peak density {dens['meta']['peak_per_km2']:.0f} features per "
+          f"{args.cell_km:g} km cell")
+
+    if args.no_map:
+        return dict(features=gdf, density=dens)
+
+    hs_path = args.hillshade or find(args.out_dir, f"{key}_hillshade.tif")
+    if args.dem and not os.path.exists(hs_path):
+        from .dem import fetch_dem_and_hillshade
+        dem_path = out_path(args.out_dir, f"{key}_dem.tif", layout=args.layout)
+        hs_path = out_path(args.out_dir, f"{key}_hillshade.tif",
+                           layout=args.layout)
+        print(f"fetching {args.resolution} m DEM for the AOI")
+        fetch_dem_and_hillshade(aoi, resolution=args.resolution,
+                                dst_crs=args.dst_crs, dem_path=dem_path,
+                                hillshade_path=hs_path, pad_deg=args.pad_deg,
+                                resampling=getattr(args, "resampling", None))
+    if not os.path.exists(hs_path):
+        print(f"note: no hillshade at {hs_path}; rendering without terrain "
+              f"(pass --hillshade, or --dem to fetch one)")
+        hs_path = None
+
+    # The figure carries ONE encoding of the data by default: the features
+    # themselves. Draping the per-km^2 raster as well would draw the same counts
+    # twice -- blocky cells under graduated symbols of the same thing -- so the
+    # raster stays a GIS product unless --density-map explicitly asks for it.
+    fpath = find(args.out_dir, f"{key}_mine_density.tif") \
+        if args.density_map else None
+    png = out_path(args.out_dir, f"{key}_mines.png", layout=args.layout)
+    clip_gdf = (gpd.GeoDataFrame(geometry=[geom or bbox_polygon(bounds)], crs=4326)
+                if args.clip else None)
+    if args.density_group:
+        what = GROUPS.get(args.density_group, args.density_group)
+    else:                       # name what was actually drawn, not "everything"
+        present = [g for g in GROUPS if g in set(gdf.group)]
+        what = ", ".join(present) if present else "no features"
+    title = args.title or (f"Abandoned mine features ({args.source.upper()}) - "
+                           f"{what}")
+    drape_i15(hs_path, fpath, out_path=png, work_crs="UTM",
+              wet_min=args.wet_min, vmax=args.vmax, cmap=args.cmap,
+              alpha=args.alpha, title=title,
+              cbar_label=f"mine features per {args.cell_km:g} km$^2$",
+              mines=gdf, mines_mode=args.mines_mode,
+              mines_cell_km=args.cell_km, mines_groups=args.density_group,
+              mines_labels=args.mines_labels,
+              perimeters=args.perimeters, basins=args.basins,
+              highlight=args.highlight, points=args.points,
+              reference=args.reference, local_roads=args.local_roads,
+              label_reference=not args.no_reference_labels,
+              basemap=args.basemap, basemap_provider=args.basemap_provider,
+              basemap_labels=args.basemap_labels, basemap_zoom=args.basemap_zoom,
+              hillshade_alpha=args.hillshade_alpha,
+              clip=clip_gdf, clip_margin=args.clip_margin,
+              north_arrow=True, scale_ticks=True, dpi=args.dpi)
+    print(f"wrote {png}")
+    _save_event_aoi(args, args.out_dir, key)
+    return dict(features=gdf, density=dens)
 
 
 def _cmd_export(args):
@@ -1424,6 +1538,7 @@ def _cmd_export(args):
         else:
             fig, ax = drape_i15(
                 hs_da, i15_tif, out_path=None, work_crs=hs_wc, cmap=args.cmap,
+                **_mine_kwargs(args),
                 wet_min=args.wet_min, perimeters=args.perimeters,
                 basins=args.basins, highlight=args.highlight, points=args.points,
                 gauges=gauges_gdf,
@@ -1857,6 +1972,44 @@ def _add_overlays(p):
                    help="output figure resolution (default 200)")
 
 
+def _add_mine_overlay_opts(p):
+    """`--mines` overlay knobs, shared by the map-drawing subcommands."""
+    p.add_argument("--mines", action="store_true",
+                   help="auto-fetch + overlay abandoned-mine features (USGS "
+                        "USMIN topo mine symbols) for the map extent")
+    p.add_argument("--mines-kinds", nargs="+", default=None, metavar="KIND",
+                   help="mine groups (waste openings surface aggregate prospect "
+                        "other) or exact feature types ('Mine Dump') to overlay; "
+                        "default 'waste openings', 'all' for everything")
+    p.add_argument("--mines-mode", default="auto",
+                   choices=["auto", "points", "density"],
+                   help="draw every feature (points), a graduated per-cell count "
+                        "(density), or switch automatically (default auto)")
+    p.add_argument("--mines-cell-km", type=float, default=1.0,
+                   help="density cell size in km (default 1 -> features per km2)")
+    p.add_argument("--mines-group", default=None, metavar="GROUP",
+                   help="count only this group in a density overlay (mixing "
+                        "dumps and prospect pits into one number is meaningless)")
+    p.add_argument("--mines-labels", action="store_true",
+                   help="label named mine features")
+
+
+def _mine_kwargs(args):
+    """drape_i15 mine-overlay kwargs from parsed args (empty when off).
+
+    Uses getattr throughout so it is safe to splat into every drape_i15 call
+    site, including subcommands that do not expose the flags.
+    """
+    if not getattr(args, "mines", False):
+        return {}
+    return dict(mines=True,
+                mines_kinds=getattr(args, "mines_kinds", None),
+                mines_mode=getattr(args, "mines_mode", "auto"),
+                mines_cell_km=getattr(args, "mines_cell_km", 1.0),
+                mines_groups=getattr(args, "mines_group", None),
+                mines_labels=getattr(args, "mines_labels", False))
+
+
 def _add_climate_opts(p):
     """NOAA Atlas 14 climate-comparison knobs, shared by `climate` and `zoom`."""
     p.add_argument("--ari", type=int, default=1,
@@ -1927,6 +2080,7 @@ def main(argv=None):
     pm.add_argument("--dst-crs", default="EPSG:5070")
     _add_layout(pm)                     # only bites when --out is not given
     _add_overlays(pm)
+    _add_mine_overlay_opts(pm)
     pm.set_defaults(func=_cmd_map)
 
     pr = sub.add_parser("run", help="DEM -> hillshade -> i15 -> figure")
@@ -1943,6 +2097,7 @@ def main(argv=None):
     pr.add_argument("--multisensor", action="store_true",
                     help="also fetch gauge-corrected MultiSensor QPE total")
     _add_overlays(pr)
+    _add_mine_overlay_opts(pr)
     _add_gauge_opts(pr)
     pr.add_argument("--gauges", action="store_true",
                     help="fetch Synoptic rain gauges + overlay them on the figure")
@@ -2065,6 +2220,7 @@ def main(argv=None):
     pn.add_argument("--durations", type=int, nargs="+", default=[15, 30, 60],
                     metavar="MIN", help="gauge peak-intensity durations, minutes")
     _add_overlays(pn)
+    _add_mine_overlay_opts(pn)
     pn.set_defaults(func=_cmd_nexrad)
 
     pp = sub.add_parser("panels",
@@ -2189,6 +2345,7 @@ def main(argv=None):
                          "(produced by default for the zoom sub-AOI)")
     _add_climate_opts(pz)              # climate knobs (--ari/--durations/--obs-smooth…)
     _add_overlays(pz)                  # note: zoom always clips to the sub-AOI
+    _add_mine_overlay_opts(pz)
     pz.set_defaults(func=_cmd_zoom)
 
     pk = sub.add_parser("pick",
@@ -2292,6 +2449,7 @@ def main(argv=None):
                     help="keep only GNIS-named creeks/rivers (default: the full "
                          "network incl. unnamed headwaters)")
     _add_overlays(pe)
+    _add_mine_overlay_opts(pe)
     pe.set_defaults(func=_cmd_export)
 
     prc = sub.add_parser("recurrence",
@@ -2432,6 +2590,7 @@ def main(argv=None):
     pb.add_argument("--no-map", action="store_true",
                     help="write the rasters and table only, no figure")
     _add_overlays(pb)
+    _add_mine_overlay_opts(pb)
     pb.add_argument("--continuous", action="store_true",
                     help="shade dNBR as a continuous ramp instead of banding it "
                          "into the severity classes BAER publishes (same colours)")
@@ -2441,6 +2600,69 @@ def main(argv=None):
     # four colours BRISK publishes); the cut and scale are resolved per product
     # in _burn_display_defaults, so wet_min starts as None rather than 5 mm/h.
     pb.set_defaults(func=_cmd_burn, cmap="baer", wet_min=None)
+
+    pmn = sub.add_parser(
+        "mines",
+        help="abandoned-mine features (USGS USMIN) over an AOI",
+        description="Map historic mine features -- dumps, tailings, adits, "
+                    "shafts -- as storm context. Source is USGS USMIN, digitised "
+                    "from published topo sheets: a HISTORICAL MAP COMPILATION, "
+                    "not a hazard inventory. No public point-level abandoned-mine "
+                    "hazard database exists (USGS FS 2025-3003 withholds them by "
+                    "policy; Nevada's own AML layers need NDOM credentials -- see "
+                    "--list-sources).")
+    _add_aoi(pmn)
+    pmn.add_argument("--kinds", nargs="+", default=list(_MINE_DEFAULT_KINDS),
+                     metavar="KIND",
+                     help="groups (waste openings surface aggregate prospect "
+                          "other) or exact feature types ('Mine Dump'); "
+                          "default 'waste openings', 'all' for everything")
+    pmn.add_argument("--geometry", default="both",
+                     choices=["both", "points", "areas"],
+                     help="USMIN splits features between a point and a polygon "
+                          "layer; dumps and tailings are nearly all polygons "
+                          "(14,815 vs 413 nationally), so 'points' alone makes a "
+                          "waste query look empty. Default both.")
+    pmn.add_argument("--source", default="usmin",
+                     help="source key (default usmin); --list-sources to see all")
+    pmn.add_argument("--token", default=None,
+                     help="ArcGIS token for a gated source (e.g. NDOM). Prefer "
+                          "the source's environment variable so it stays out of "
+                          "shell history.")
+    pmn.add_argument("--list-sources", action="store_true",
+                     help="list the known mine sources and stop")
+    pmn.add_argument("--named-only", action="store_true",
+                     help="keep only features named on the topo sheet")
+    pmn.add_argument("--cell-km", type=float, default=1.0,
+                     help="density cell size in km (default 1 -> per km2)")
+    pmn.add_argument("--density-group", default=None, metavar="GROUP",
+                     help="count only this group in the density raster/symbols")
+    pmn.add_argument("--mines-mode", default="points",
+                     choices=["auto", "points", "density"],
+                     help="overlay style on the figure (default points)")
+    pmn.add_argument("--mines-labels", action="store_true",
+                     help="label named mine features")
+    pmn.add_argument("--density-map", action="store_true",
+                     help="also drape the per-km2 density raster behind the "
+                          "features (off by default: with --mines-mode density "
+                          "it draws the same counts twice). --cmap / --wet-min / "
+                          "--vmax apply to that field.")
+    pmn.add_argument("--vmax", type=float, default=None,
+                     help="colour-scale max for the --density-map field "
+                          "(default: auto from the data)")
+    pmn.add_argument("--hillshade", help="hillshade tif for the map backdrop")
+    pmn.add_argument("--dem", action="store_true",
+                     help="fetch a DEM + hillshade for the AOI if none is found")
+    pmn.add_argument("--resolution", type=int, default=10,
+                     help="DEM resolution for --dem (default 10 m)")
+    _add_dem_opts(pmn)
+    pmn.add_argument("--no-map", action="store_true",
+                     help="write the layer, table and raster only, no figure")
+    _add_overlays(pmn)
+    # counts per km^2, not rainfall: the YlGnBu / 5 mm-h defaults from
+    # _add_overlays would mis-scale it. Mask cells holding no features, and keep
+    # the ramp warm so it cannot be mistaken for the rain field on a neighbour.
+    pmn.set_defaults(func=_cmd_mines, cmap="YlOrBr", wet_min=0.5)
 
     args = ap.parse_args(argv)
     # One switch for the whole process rather than threading `layout=` through
