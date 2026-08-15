@@ -5,7 +5,8 @@ package is installed). This page mirrors `python -m stormscape <command> --help`
 run that for the authoritative, always-current text.
 
 ```
-stormscape {dem, i15, map, run, gauges, compare, nexrad, panels, vgauge, zoom, pick}
+stormscape {dem, i15, map, run, gauges, compare, nexrad, panels, vgauge, zoom,
+            pick, climate, smooth, recurrence, export, burn}
 ```
 
 | Command | Purpose |
@@ -24,6 +25,8 @@ stormscape {dem, i15, map, run, gauges, compare, nexrad, panels, vgauge, zoom, p
 | `climate` | NOAA Atlas 14 rainfall climatology vs observed I15/I30/I60 — comparison figure + anomaly maps (reuses rasters; no re-run) |
 | `smooth` | Smooth a radar field: methods×radii comparison figure + optional radar–gauge skill sweep (reuses rasters; no re-run) |
 | `recurrence` | Wet-gauge table: peak I15/I30/I60 + time-of-peak, anomaly + recurrence interval vs NOAA Atlas 14 (PFDS point query) |
+| `export` | Georeferenced EPSG:3857 GeoTIFFs + GeoPDF figures + NHD stream vectors for GIS / CalTopo (reuses rasters; no re-run) |
+| `burn` | Near-real-time burn severity over an AOI from CIMSS BRISK daily dNBR (or the BAER soil-burn-severity archive) |
 
 The AOI is **always** given as either `--bbox W S E N` (lon/lat degrees) or
 `--aoi <vector file>` (GeoJSON/SHP/GPKG/KMZ). Gauge steps need a free Synoptic
@@ -496,6 +499,62 @@ python -m stormscape export --from-dir ./out --from-key HiddenValley \
 
 ---
 
+### `burn` — near-real-time burn severity (CIMSS BRISK dNBR)
+
+Maps the **burn scar** over an AOI from **CIMSS BRISK**: a daily, nine-satellite
+dNBR composite (GOES ABI, VIIRS, Landsat 8/9, Sentinel-2) covering every large US
+fire, so severity is available *while the fire is still burning*. Scenes are
+per-fire, per-day GeoTIFFs in the open SSEC archive; this command screens the
+archive for fires intersecting the AOI (reading only GeoTIFF *headers* over HTTP
+range requests — it downloads nothing until it knows what it needs), caches the
+scenes it does need, mosaics them, classifies severity and draws the map.
+
+> **dNBR is a *vegetation* index, not soil burn severity.** The USGS post-fire
+> debris-flow models are calibrated on **soil** burn severity — dNBR adjusted by
+> field crews for hydrophobicity, ground cover and duff consumption. BRISK is
+> explicitly **interim**: act on it early, then supersede it with `--product sbs`
+> when the BAER assessment lands.
+
+Groups **A + C**, plus:
+| Arg | Type / default | Meaning |
+|---|---|---|
+| `--date YYYYMMDD` | str | the scar **as of** this date — each fire is shown at its latest scene on or before it (default: latest available) |
+| `--since YYYYMMDD` | str | ignore scenes older than this (e.g. to drop last season's fires) |
+| `--product {dnbr,sbs,baer_dnbr}` | `dnbr` | `dnbr` = BRISK daily composite; `sbs` = BAER **soil** burn severity, authoritative but only for assessed fires; `baer_dnbr` = the BAER teams' own dNBR (2025 only so far) |
+| `--min-age DAYS` | float | require the composite to be at least DAYS old (since the fire entered the archive) and skip fires that are not, naming them. Off by default — an immature scar still beats none, and the run says so |
+| `--scheme {usgs,brisk}` | `usgs` | dNBR severity breaks: USGS/MTBS `0.10/0.27/0.44/0.66`, or the portal's `0.10/0.40/0.70` |
+| `--fire NAME…` | strs | restrict to these fires (names as printed by `--list`) |
+| `--years Y…` | ints | archive years to search (default: this year and last) |
+| `--list` | flag | list the fires intersecting the AOI and stop — **downloads nothing** |
+| `--all-dates` | flag | with `--list`, show every scene per fire instead of only the latest |
+| `--cache-dir` | path | scene + index cache (default `<out-dir>/brisk_cache`) |
+| `--hillshade` | path | hillshade for the map backdrop (default `<out-dir>/<key>_hillshade.tif`) |
+| `--dem` | flag | fetch a DEM + hillshade for the AOI if none is found |
+| `--resolution` | int, `10` | DEM resolution (m) for `--dem` |
+| `--vmax` | float | colour-scale max (default `1.0` for dNBR, `4.0` for the `sbs` class field) |
+| `--no-map` | flag | write the rasters + table only, no figure |
+| `--workers` | int, `12` | parallel header reads / downloads |
+
+| `--continuous` | flag | shade dNBR as a smooth ramp instead of banding it into severity classes (same colours) |
+
+Maps default to the **BAER class palette**, banded into the severity classes BAER
+publishes, with the colour bar labelled by class name rather than dNBR value — so a
+stormscape map can be laid beside a BAER product. `--continuous` gives the smooth
+ramp in the same colours, an explicit `--cmap` (e.g. `YlOrRd`) opts out of the class
+colours entirely, and `--alpha` makes the scar read more strongly than the
+project-wide 0.32 drape.
+
+```bash
+# what has burned here? (headers only, no downloads)
+python -m stormscape burn --aoi event_AOI.kmz --list
+
+# fetch, cache, classify and map it
+python -m stormscape burn --aoi event_AOI.kmz --date 20260814 \
+    --out-dir ./out --key event --dem --reference --clip
+```
+
+---
+
 ## Outputs at a glance
 
 | Command | Writes |
@@ -508,6 +567,7 @@ python -m stormscape export --from-dir ./out --from-key HiddenValley \
 | `nexrad` | `<key>_refl.tif` + `<key>_nexrad.png` (or `<key>_i15max.tif` … with `--intensity`); volumes cached under `--cache-dir` |
 | `panels` | `<key>_panels.png` |
 | `vgauge` | per-gauge CSVs in `RainGaugeData/`; `<key>_vg_atlas.png` (`--atlas`); per-gauge figures in `VirtualGaugeFigures/` (`--detail`) |
+| `burn` | `<key>_dnbr.tif`, `<key>_severity.tif`, `<key>_burn_classes.csv` (pixels + true km² + fraction per class), `<key>_burn_scenes.geojson` (which fire, which date), `<key>_burn.png`; scenes cached under `brisk_cache/` |
 | `zoom` | `<key>.png` (zoomed map) + `<key>_panels.png` + (unless `--no-climate`) `<key>_climate_compare.png`, `<key>_clim_i{d}.tif`, `<key>_anom_i{d}.png`/`.tif`; `--crop-rasters` adds cropped `<key>_<field>.tif`; `--refine-dem` adds `<key>_dem/_hillshade.tif` |
 | `pick` | `<from-key>_pick.html` (self-contained browser bbox picker) |
 | `climate` | `<key>_clim_i{15,30,60}.tif`, `<key>_climate_compare.png`, `<key>_anom_i{15,30,60}.tif` + `.png`; grids cached under `atlas14_cache/` |

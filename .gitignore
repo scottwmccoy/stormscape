@@ -34,3 +34,4 @@ RainGaugeData/
 VirtualGaugeFigures/
 
 # Sample figures can still be committed with `git add -f *.png`
+baer_study/

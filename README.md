@@ -25,7 +25,10 @@ shapely geometry) and, for rainfall, a **storm-day date**, it will:
 5. **Reach the raw single-radar NEXRAD Level II volumes** for the radar nearest
    the AOI — reflectivity / velocity at each elevation tilt, gridded over the AOI
    or sampled at the gauges (the underlying radar behind the MRMS mosaic;
-   `stormscape.nexrad`).
+   `stormscape.nexrad`);
+6. **Map near-real-time burn severity** over the same AOI from **CIMSS BRISK**
+   daily multi-satellite dNBR — so a scar can be put under the rain while the
+   fire is still burning (`stormscape.burn`).
 
 It was lifted out of a post-fire debris-flow study and generalized: nothing
 here is tied to that project's fire perimeters or event inventory — you supply
@@ -552,6 +555,77 @@ picks the format; `--streams-bbox` keeps whole flowlines over the bounding box;
 
 ---
 
+### Near-real-time burn severity (BRISK dNBR)
+
+`burn` maps the **burn scar** over an AOI. It reads **CIMSS BRISK** — a daily,
+nine-satellite dNBR composite (GOES ABI, VIIRS, Landsat 8/9, Sentinel-2) that
+covers every large US fire — so severity is available *while the fire is still
+burning*, which the authoritative products are not: BAER soil burn severity
+arrives days to weeks after containment and only for fires that get an
+assessment, MTBS a year or more later.
+
+```bash
+# what has burned in this AOI? (headers only — downloads nothing)
+python -m stormscape burn --aoi event_AOI.kmz --list
+```
+
+```bash
+# fetch, cache, classify and map it
+python -m stormscape burn --aoi event_AOI.kmz --date 20260814 \
+    --out-dir ./out --key event --dem --reference --clip
+```
+
+That writes `event_dnbr.tif` (the composite index), `event_severity.tif` (the
+class index), `event_burn_classes.csv` (pixels, **true ground area** and fraction
+per class), `event_burn_scenes.geojson` (which fire each scene came from, and
+when), and `event_burn.png` draped over the hillshade.
+
+`--date` asks for the scar **as of** that date — each fire is shown at its latest
+scene on or before it, so a storm-day map does not include severity mapped after
+the storm. `--since` drops older seasons, `--fire NAME` restricts to one incident,
+and `--product sbs` switches to the BAER **soil** burn severity archive where an
+assessment exists. `--scheme` picks the dNBR breaks: `usgs` (MTBS/USGS
+0.10/0.27/0.44/0.66, the default) or `brisk` (0.10/0.40/0.70).
+
+Maps are drawn in the **BAER class palette** and **banded into severity classes**,
+the way burn severity is published — the colour bar carries class names rather than
+dNBR numbers, so a stormscape map can be laid beside a BAER product. (That palette
+is verified from the products themselves: all 77 of the 2025 BAER soil-burn-severity
+rasters embed the same four class colours, and they are the same four BRISK
+publishes.) `--continuous` shades a smooth ramp in the same colours instead, and
+`--alpha` makes the scar read more strongly over the terrain.
+
+**Does BRISK's dNBR match the BAER teams' own?** Yes. Of the fires with both
+products in 2025 (39 of them), agreement over burned cells has median **slope
+1.013, bias +0.003, ratio 1.011** — unity slope, no bias — and **r = 0.938 across
+1.24 M cells** pooled over well-matched fires. The exceptions are **compositing
+latency, not a different algorithm**: every poor performer read *low* on the BAER
+date and recovered to r = 0.80–0.96 given a scene 5–21 days later. A fixed +14-day
+rule takes fires at r ≥ 0.90 from 14/39 to 24/39 and fires below 0.60 from 5 to 1.
+So **trust the pattern immediately, but give the composite about two weeks before
+trusting the magnitude.** BAER products derived from Sentinel-2 (20 m) agree better
+than Landsat-derived ones (30 m) — median r 0.923 vs 0.814, p = 0.0005.
+
+`burn` acts on that: every run reports each scene's **age** (days since the fire
+entered the archive) and flags composites younger than 14 days, and `--min-age DAYS`
+turns that into a hard filter, skipping too-young fires by name. It is off by
+default — an immature scar still beats no scar, as long as the run says so.
+`--product baer_dnbr` fetches the BAER teams' own dNBR for comparison, and
+[`examples/brisk_vs_baer.py`](examples/brisk_vs_baer.py) reproduces the whole study.
+
+Scenes are cached in `brisk_cache/` and the archive index in the same place, so
+re-running a map costs no network at all. The first AOI screen reads a few hundred
+GeoTIFF *headers* over HTTP range requests (~20 s) and memoises the footprints;
+after that it is instant.
+
+> **dNBR is a *vegetation* index, not soil burn severity.** The USGS post-fire
+> debris-flow models are calibrated on **soil** burn severity, which is dNBR
+> adjusted by field crews for hydrophobicity, ground cover and duff consumption.
+> BRISK is explicitly **interim**: use it to act early, then supersede it with
+> `--product sbs` when the BAER assessment lands.
+
+---
+
 ## Python API
 
 ```python
@@ -658,6 +732,11 @@ kept, and 2-min `PrecipRate` is stacked over each contiguous wet run.
 - **NOAA Atlas 14** precipitation-frequency climatology via the gridded ASCII
   grids on the PFDS GIS server (`hdsc.nws.noaa.gov/pub/hdsc/data/...`); region
   extents bundled in `data/atlas14_regions.csv`.
+- **Burn severity** from **CIMSS BRISK** (UW-Madison SSEC) — daily per-fire dNBR
+  composites in the open archive behind the
+  [BRISK portal](https://cimss.ssec.wisc.edu/brisk/)
+  (`bin.ssec.wisc.edu/pub/realearth/brisk/`), plus the companion **BAER soil burn
+  severity** archive (`.../baer-data/`).
 
 ### DEM resampling
 
@@ -721,10 +800,11 @@ stormscape/
 │   ├── atlas14.py   NOAA Atlas 14 climatology grids -> intensity fields + anomaly
 │   ├── smoothing.py NaN-aware field smoothing + radar-gauge skill sweep
 │   ├── export.py    EPSG:3857 GeoTIFFs, GeoPDF figures, NHD stream vectors
+│   ├── burn.py      near-real-time burn severity (CIMSS BRISK dNBR / BAER SBS)
 │   ├── refdata.py   AOI-scoped NHD streams / TIGER roads / GNIS places
 │   ├── plot.py      drape fields over hillshade + basemap/vector/gauge overlays
 │   ├── data/        bundled tables (nexrad_sites.csv, atlas14_regions.csv)
-│   └── cli.py       15 subcommands (see docs/cli.md)
+│   └── cli.py       16 subcommands (see docs/cli.md)
 ├── examples/            worked example + batch event templates
 ├── docs/cli.md          full CLI reference
 ├── environment.yml      conda-forge environment ("stormscape")
@@ -753,7 +833,8 @@ science math against known answers rather than just importing things:
 | comparison | bias/RMSE/ratio arithmetic; the RQI and cadence screens; cadence must **not** filter the storm total |
 | merging | mean-field factor is Σgauge/Σradar; leave-one-out beats the raw field on bias |
 | export | EPSG:3857 output; dry and no-data cells are transparent; categorical fields use nearest-neighbour; the GeoPDF neatline bounds the map frame |
-| CLI | all 15 subcommands build; documented flags still exist on every command |
+| burn severity | dNBR breaks match the published x1000 thresholds; unburned stays distinct from unobserved; a scene's NaN surround never erases a neighbouring fire; class mosaics are never interpolated; a past-year archive index caches forever while today's expires |
+| CLI | all 16 subcommands build; documented flags still exist on every command |
 
 Tests needing an optional dependency (Py-ART, wradlib, GDAL's PDF driver) are
 marked `optional_deps` and skip themselves. Anything hitting the network would be

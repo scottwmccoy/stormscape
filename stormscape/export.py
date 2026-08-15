@@ -40,7 +40,7 @@ DEFAULT_EXPORT_FIELDS = ("anom_i15", "i15max")
 
 # field-name substrings that are categorical / quality flags: reproject by
 # nearest neighbour and never colour-ramp them like a continuous field.
-_CATEGORICAL = ("tpki15", "rqi", "shsr", "cbb", "flag")
+_CATEGORICAL = ("tpki15", "rqi", "shsr", "cbb", "flag", "severity")
 
 
 def _is_categorical(field: str) -> bool:
@@ -101,6 +101,16 @@ def _field_style(field: str, arr, *, cmap: str = "YlGnBu",
             max(2.0, float(np.percentile(finite, 99))) if finite.size else 2.0)
         return anomaly_cmap, 0.0, vmx, TwoSlopeNorm(vcenter=1.0, vmin=0.0,
                                                     vmax=vmx), None
+    if f.startswith("dnbr") or "severity" in f:
+        # burn severity runs 0-1 (dNBR) or 0-N (classes), not 0-100+ like an
+        # intensity, so it needs its own scale; below the unburned break stays
+        # transparent so an unburned hillside shows the basemap, not pale paint
+        if "severity" in f:
+            vmx = vmax if vmax is not None else (
+                float(np.nanmax(finite)) if finite.size else 4.0)
+            return "YlOrRd", 0.0, max(vmx, 1.0), None, 0.5
+        vmx = vmax if vmax is not None else 1.0
+        return "YlOrRd", 0.0, vmx, None, 0.10
     vmx = vmax if vmax is not None else (
         max(10.0, float(np.percentile(finite, 99))) if finite.size else 10.0)
     intensity = any(t in f for t in ("i15", "i30", "i60", "i2max", "peakrate"))
