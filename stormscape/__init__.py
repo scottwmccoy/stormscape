@@ -48,6 +48,11 @@ from .gauges import (fetch_gauge_event, gauge_fields, gauge_intensities,
                      gauge_timeseries, get_rainfall as gauge_rainfall,
                      get_stations as gauge_stations, load_event_series,
                      precipitation_per_minute, storm_window)
+from .mines import (GROUPS as MINE_GROUPS, SOURCES as MINE_SOURCES,
+                    density_grid as mine_density_grid,
+                    density_raster as mine_density_raster,
+                    group_counts as mine_group_counts, group_of as mine_group_of,
+                    mine_features, register_source as register_mine_source)
 from .mrms import (compute_i15, fetch, fetch_many, i15_storm_day,
                    multisensor_total, parse_date, save_fields,
                    virtual_gauge_timeseries)
@@ -99,4 +104,7 @@ __all__ = [
     "streams", "roads", "places", "reference_layers",
     "burn_severity", "find_scenes", "burn_catalog", "fetch_scene",
     "burn_classify", "SEVERITY_SCHEMES", "register_brisk_cmap",
+    "mine_features", "mine_density_grid", "mine_density_raster",
+    "mine_group_counts", "mine_group_of", "register_mine_source",
+    "MINE_GROUPS", "MINE_SOURCES",
 ]

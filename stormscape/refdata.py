@@ -17,6 +17,7 @@ empty GeoDataFrame so a flaky endpoint never kills a figure.
 
 from __future__ import annotations
 
+import sys
 import warnings
 
 import geopandas as gpd
@@ -38,32 +39,80 @@ GNIS = ("https://carto.nationalmap.gov/arcgis/rest/services/"
 _WATERCOURSE = {46000, 46003, 46006, 46007, 55800, 33400}
 
 
-def _query(service, layer, bounds, out_fields="*", where="1=1", page=2000,
-           timeout=60):
-    """Page an ArcGIS REST layer over a (W,S,E,N) bbox -> GeoDataFrame(4326)."""
+def _more_pages(fc) -> bool:
+    """Whether an ArcGIS response says it truncated the result set.
+
+    The flag lives in **two different places** depending on the server: a
+    MapServer (NHD, TIGER, GNIS) puts ``exceededTransferLimit`` at the top
+    level of the GeoJSON, while a hosted FeatureServer (USMIN) puts it only
+    under ``properties``. Checking one location silently truncates the other's
+    results at the page size -- USMIN returns exactly 2,000 of 3,134 features
+    over the Hidden Valley AOI, with no error to notice.
+    """
+    return bool(fc.get("exceededTransferLimit")
+                or (fc.get("properties") or {}).get("exceededTransferLimit"))
+
+
+def arcgis_query(service, layer, bounds, out_fields="*", where="1=1", page=2000,
+                 timeout=60, token=None, paginates=True, what=None):
+    """Page an ArcGIS REST layer over a (W,S,E,N) bbox -> GeoDataFrame(4326).
+
+    ``token`` authenticates against a gated service (never logged).
+    ``paginates=False`` suits a server that rejects ``resultOffset`` outright
+    (the NBMG USMIN mirror answers "Pagination is not supported"), in which
+    case a single page is fetched. ``what`` labels this layer in any failure
+    message.
+    """
     geom = f"{bounds[0]},{bounds[1]},{bounds[2]},{bounds[3]}"
+    label = what or f"{service}/{layer}"
     feats, offset = [], 0
     while True:
         params = dict(geometry=geom, geometryType="esriGeometryEnvelope",
                       inSR=4326, outSR=4326, spatialRel="esriSpatialRelIntersects",
                       where=where, outFields=out_fields, returnGeometry="true",
-                      f="geojson", resultRecordCount=page, resultOffset=offset)
+                      f="geojson")
+        if paginates:
+            params.update(resultRecordCount=page, resultOffset=offset)
+        if token:
+            params["token"] = token
         try:
             r = requests.get(f"{service}/{layer}/query", params=params,
                              timeout=timeout)
             fc = r.json()
         except Exception as e:                         # noqa: BLE001
-            warnings.warn(f"reference query failed ({service}/{layer}): "
-                          f"{repr(e)[:100]}")
+            _fail(label, repr(e)[:120])
+            break
+        # An ArcGIS error is HTTP 200 with an {"error": ...} body, so it would
+        # otherwise read as "no features here" -- indistinguishable from an AOI
+        # that genuinely has none.
+        if isinstance(fc, dict) and "error" in fc:
+            err = fc["error"]
+            _fail(label, f"{err.get('code')} {err.get('message')}")
             break
         batch = fc.get("features", [])
         feats.extend(batch)
-        if len(batch) < page or not fc.get("exceededTransferLimit"):
+        if not paginates or not batch or not _more_pages(fc):
             break
         offset += page
     if not feats:
         return gpd.GeoDataFrame(geometry=[], crs=4326)
     return gpd.GeoDataFrame.from_features(feats, crs=4326)
+
+
+def _fail(label, detail):
+    """Report a query failure loudly.
+
+    Printed as well as warned because this module installs a global
+    ``warnings.filterwarnings("ignore")``, which would otherwise swallow the
+    warning and leave a dead service looking like an empty AOI.
+    """
+    msg = f"query failed ({label}): {detail}"
+    warnings.warn(msg)
+    print(f"warning: {msg}", file=sys.stderr)
+
+
+#: back-compat alias -- this was private before mines.py needed it.
+_query = arcgis_query
 
 
 def streams(aoi, named_only=False, watercourse_only=True):

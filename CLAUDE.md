@@ -18,7 +18,10 @@ vector file, or a shapely geometry) plus a **storm-day date** into:
 5. **near-real-time burn severity** — CIMSS **BRISK** daily multi-satellite
    dNBR composites (+ the BAER soil-burn-severity archive) over the AOI, cached,
    classified and mapped (`stormscape/burn.py`);
-6. raw **single-radar NEXRAD Level II** tilts (reflectivity/velocity) for the
+6. **abandoned mine features** — USGS **USMIN** topo mine symbols (dumps,
+   tailings, adits, shafts) over the AOI, grouped, filterable and mappable as
+   points or a per-km2 density surface (`stormscape/mines.py`);
+7. raw **single-radar NEXRAD Level II** tilts (reflectivity/velocity) for the
    radar nearest the AOI — gridded over the AOI or sampled at the gauges, with a
    Z–R diagnostic (`stormscape/nexrad.py`); the underlying radar behind the MRMS
    mosaic, and the way to reach pre-2020 events.
@@ -96,10 +99,11 @@ in `README.md`.
 - `stormscape/smoothing.py` — NaN-aware field smoothing (gaussian/uniform/median/idw) + radar-gauge skill sweep
 - `stormscape/export.py` — georeferenced exports for GIS/CalTopo: EPSG:3857 GeoTIFFs (raw float + colorized RGBA) + GeoPDF figures
 - `stormscape/burn.py` — near-real-time burn severity (BRISK dNBR / BAER SBS)
+- `stormscape/mines.py` — abandoned mine features (USGS USMIN) + density
 - `stormscape/refdata.py` — AOI-scoped NHD streams / TIGER roads / GNIS places
 - `stormscape/plot.py` — drape i15 over hillshade + basemap/vector/gauge overlays
 - `stormscape/data/` — bundled tables (`nexrad_sites.csv` NCEI HOMR, `atlas14_regions.csv`)
-- `stormscape/cli.py` — `stormscape {dem,i15,map,run,gauges,compare,nexrad,panels,vgauge,zoom,pick,climate,smooth,recurrence,export,burn}`
+- `stormscape/cli.py` — `stormscape {dem,i15,map,run,gauges,compare,nexrad,panels,vgauge,zoom,pick,climate,smooth,recurrence,export,burn,mines}`
 - `environment.yml`, `pyproject.toml`, `examples/`
 
 ## Conventions & gotchas (learned during development)
@@ -1069,10 +1073,116 @@ in `README.md`.
   a 15-fire central-Oregon mosaic, and Cottonwood-Peak NV SBS.
   Tests: `tests/test_burn.py` (48, offline — synthetic listings + local GeoTIFFs).
 
+- **Abandoned mine features (`mines.py`, CLI `mines`, 2026-08-15) — USGS USMIN.**
+  Puts historic mining under the rain: in the Great Basin the steep catchments
+  that produce debris flows are full of it, and **mine dumps and tailings** are
+  loose, often contaminated material sitting on the channel network.
+  **The headline constraint, which drove the whole design: there is NO public
+  point-level abandoned-mine HAZARD database, by policy.** USGS **FS 2025-3003**
+  (2025) says the national abandoned-mine-feature database being built under
+  USMIN "will not publish specific location information of any abandoned mine
+  workings, and the detailed national abandoned mine feature database will not be
+  publicly available" — the locations could be used to enter hazardous workings or
+  vandalise historic structures — and only aggregated derivatives (per county,
+  per watershed) are planned. **Nevada matches:** NDOM's operational AML layers
+  are real and findable (org `CXYUMoYknZtf5Qr3`; the internal *AML Field Map*
+  web map references `NVPoints`, `NVSites`, `InternFieldDataCaptureLayers`
+  (hazards / revisit-securing / non-hazards), `AMLCracForms`) but every one
+  answers **`499 Token Required`** anonymously — their public AML items are a
+  hazard-reporting form and a "Stay Out and Stay Alive" game. Their open-data
+  portal's "AML" entry is a **Hub Page**, not a layer. So NDOM needs a
+  credentialed request, not an endpoint. Public Nevada fallback: **NBMG OFR
+  2001-03** (100k+ sites, shapefile, UTM 11 **NAD27**, ~115 MB, $30, compiled with
+  BLM NV + NDOM, 2001, self-described preliminary).
+  **What we use instead: USMIN "Prospect- and Mine-Related Features from USGS 7.5-
+  and 15-minute topographic quadrangle maps"** — public precisely *because* it is
+  digitised from already-published topo sheets, so it reveals nothing the printed
+  maps did not. `energy.usgs.gov/arcgis/rest/services/Hosted/USMin_Prospect_and_
+  mine_related_map_features/FeatureServer`, **layer 17 = points, 18 = polygons**,
+  EPSG:4326. All 11 western states covered (NV 121,193 · CA 61,347 · AZ 43,741 ·
+  CO 43,297 · MT 22,335 · NM 18,709 · UT 18,471 · ID 16,635 · OR 14,775 ·
+  WA 11,016 · WY 7,690). Read it as a **historical map compilation, not a hazard
+  inventory** — `topo_date` runs 1950-1994, no hazard ranking, no securing status.
+  **THE GOTCHA THAT WOULD HAVE SHIPPED A BROKEN DEFAULT: the waste is in the
+  POLYGON layer.** USMIN splits features by how the symbol was drawn, and dumps
+  and tailings were nearly always drawn as an extent — **14,815 polygons vs 413
+  points nationally; 778 vs 4 in Nevada**. So `geometry="points"` returns ~nothing
+  for a `waste` query and looks exactly like an AOI with no mining.
+  **`geometry="both"` is the default** for that reason (`_as_points` takes
+  `representative_point()` for polygons when counting/labelling — guaranteed
+  inside, unlike a crescent dump's centroid).
+  **Paging bug found + fixed in `refdata` (latent, would have bitten this
+  module):** ArcGIS reports truncation as `exceededTransferLimit` **at the top
+  level on a MapServer** (NHD, TIGER, GNIS) but **only under `properties` on a
+  hosted FeatureServer** (USMIN). `_query` checked the top level only, so USMIN
+  returned exactly **2000 of 3134** features over the HV AOI with no error.
+  `refdata._more_pages` now checks both; `_query` was renamed **`arcgis_query`**
+  (public, `_query` kept as an alias) and gained `token=`, `paginates=` and
+  `what=`. The existing layers were *unaffected* (all MapServers — verified by
+  paging 26,037 NHD flowlines correctly), so nothing published changed.
+  **Second silent-failure fix:** an ArcGIS error is **HTTP 200 with an
+  `{"error": ...}` body**, which read as "no features here". It now warns *and*
+  prints to stderr — printing because `refdata` installs a module-level
+  `warnings.filterwarnings("ignore")` that would swallow the warning. (That
+  global filter is a pre-existing wart: it silences warnings process-wide for
+  anything imported after it.) This is how the **NBMG USMIN mirror**
+  (`gisweb.unr.edu/nbmg/.../USMIN/MapServer`, v4.0, NV only) went unnoticed —
+  it answers **"Pagination is not supported"** to any `resultOffset`, hence the
+  `paginates=False` flag in its source spec. Prefer the national service.
+  **Also `ftr_name` is `''`, not null** (2,990 of 3,134 over HV), so `.notna()`
+  calls every feature named — `_blank_to_na` fixes it.
+  **Grouping:** 55 national feature types collapse to six groups (`waste`,
+  `openings`, `surface`, `aggregate`, `prospect`, `other`) via an exact map plus
+  **prefix families** (`tailings*`→waste, `quarry*`→surface) so a subtype USMIN
+  adds later lands correctly instead of falling to `other`. **Default
+  `DEFAULT_KINDS = ("waste", "openings")`** — two-thirds of features over a
+  Nevada AOI are prospect pits, which bury the rainfall field. The kind filter is
+  **pushed into the service `where`** when expressible (`other` and "everything"
+  cannot be enumerated → `None`, filter locally) and **always re-applied locally**
+  so a source that ignores `where` still honours `kinds`.
+  **Density:** `density_grid` (vector, → cell centres with `count`/`per_km2`) and
+  `density_raster` (→ mrms-style dict, so `save_fields`/`drape_i15` just work) both
+  bin in **EPSG:5070 (equal-area)** on a grid **anchored to the projection origin**,
+  so a cell is the same km² everywhere and the same ground bins identically run to
+  run. Both paths are cross-checked in tests to give identical totals and maxima.
+  `plot.add_mines` draws points (polygons as real footprints) or graduated symbols
+  with **marker area ∝ count** plus a size key — a graduated symbol is unreadable
+  without one. `MINE_DENSITY_SWITCH = 400` drives `mode="auto"`.
+  **Pluggable sources by design:** `SOURCES` + `register_source()`; `ndom` is
+  already registered with its URLs and a `$STORMSCAPE_NDOM_TOKEN` hook, and its
+  field mapping uses **tolerant candidate lists** (`_pick` returns an empty column
+  rather than silently mislabelling one) because those column names are unverified
+  guesses until access lands. Tokens are read from arg or env, **never logged**.
+  **CLI:** `mines` writes `<key>_mines.geojson`, `_mine_classes.csv`,
+  `_mine_density.tif`, `_mines.png`; `--mines` is an overlay flag on **map, run,
+  nexrad, zoom, burn, export** (the commands that render through `drape_i15` —
+  `climate`/`smooth` use `_draw_field`, and the `compare` residual maps are left
+  clean deliberately). `_mine_kwargs(args)` uses `getattr` so it is safe to splat
+  everywhere. Defaults `cmap="YlOrBr"`, `wet_min=0.5` (counts, not rainfall).
+  `drape_i15` gained overlay params `mines`/`mines_mode`/`mines_kinds`/
+  `mines_cell_km`/`mines_groups`/`mines_labels`; `mines=True` auto-fetches like
+  `reference=True`. **`drape_i15` now also accepts `i15=None`** → terrain +
+  overlays, no field and no colour bar (it raises only if hillshade *and* field
+  are both None). That exists because the first `mines` figures draped the
+  density raster *and* drew the features: blocky 1 km cells under graduated
+  symbols of the same counts, i.e. one quantity encoded twice. The figure now
+  carries the features alone; the raster stays a GIS product, and
+  **`--density-map`** drapes it on request. Useful for any future
+  vectors-over-terrain map.
+  **Bug caught only by rendering, not by the unit tests:** `_cmd_mines` read
+  `args.vmax`, which only `burn`'s parser defines — so the command fetched, wrote
+  three files, then died at the last step. The CLI tests patch the command out, and
+  the real path needs network, so neither saw it. Fixed by adding `--vmax` *and* by
+  `test_cmd_mines_only_reads_args_the_parser_defines`, which **AST-walks
+  `_cmd_mines` for `args.<name>` and checks each against the parsed namespace**
+  (39 attributes). Worth copying for other commands.
+  **No new deps.** Tests: `tests/test_mines.py` (75, offline — `requests.get`
+  replaced by a replaying double).
+
 - **Testing (`tests/`, pytest, added 2026-07-29) — run it before every push.**
-  `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **232 tests,
-  ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14 request, no
-  token), so it is cheap enough to run constantly. Config lives in
+  `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **480 tests,
+  ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14/USMIN request,
+  no token), so it is cheap enough to run constantly. Config lives in
   `pyproject.toml` (`[tool.pytest.ini_options]`, `--strict-markers`); install the
   deps with `pip install -e ".[test]"`. Tests encode the **documented invariants**
   from this file, not implementation details: the i15 estimator round-trip, the
