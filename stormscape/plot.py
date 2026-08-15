@@ -17,6 +17,7 @@ import xarray as xr
 from matplotlib.lines import Line2D
 
 from .aoi import read_overlay
+from .layout import find
 
 warnings.filterwarnings("ignore")
 
