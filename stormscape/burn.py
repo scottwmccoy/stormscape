@@ -537,6 +537,10 @@ def classify(dnbr, scheme: str = "usgs"):
     NaN in, NaN out -- the unburned *surround* stays missing rather than being
     called class 0, which is a real distinction: "we looked and it did not burn"
     versus "we have no observation here".
+
+    For *drawing* a classed map, do not pass this output to
+    :func:`severity_colors` -- that norm bands the raw dNBR itself. Use this to
+    count classes and to feed models.
     """
     try:
         breaks = SEVERITY_SCHEMES[scheme]["breaks"]
@@ -641,6 +645,19 @@ def severity_colors(scheme: str = "usgs"):
     field is banded at the scheme's severity breaks rather than shaded
     continuously, and the colour bar is labelled with the class names instead of
     dNBR numbers.
+
+    **Draw the raw dNBR with these, not** :func:`classify` **output.** The norm's
+    boundaries are in dNBR units (``-1``, then the scheme's breaks, then ``2``)
+    and it does the classing itself::
+
+        cmap, norm, ticks, labels = severity_colors("usgs")
+        im = ax.imshow(dnbr, cmap=cmap, norm=norm)          # right
+        im = ax.imshow(classify(dnbr), cmap=cmap, norm=norm)  # WRONG
+
+    Passing class indices is silently wrong rather than an error: 0 lands in the
+    unburned bin and every burned class (1, 2, 3, 4) sits above the top break, so
+    the whole scar renders "high" -- a plausible-looking map of the wrong thing.
+    :func:`classify` is for counting and for feeding models; this is for drawing.
 
     A scheme with three breaks (four classes) maps exactly onto the four
     official :data:`BAER_CLASS_COLORS`. The five-class ``usgs`` scheme has no
