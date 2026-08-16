@@ -360,3 +360,42 @@ def test_the_all_dry_fallback_never_warns(monkeypatch):
                                  dt.datetime(2026, 8, 11, 6)),
                                 max_wet_hours=1)
     assert len(wet) == 1
+
+
+# --------------------------------------------------------------------------- #
+# intensity <-> accumulation
+# --------------------------------------------------------------------------- #
+def test_intensity_to_accumulation_is_the_documented_case():
+    """i15 of 24 mm/h is 6 mm accumulated in those 15 minutes -- the factor is
+    duration/60 and it is easy to carry the wrong way round."""
+    assert mrms.to_accumulation(24, 15) == pytest.approx(6.0)
+
+
+def test_accumulation_to_intensity_inverts_it():
+    assert mrms.from_accumulation(6, 15) == pytest.approx(24.0)
+
+
+def test_intensity_round_trips():
+    import numpy as np
+    i = np.array([0.0, 3.5, 24.0, 102.2])
+    for dur in (15, 30, 60):
+        np.testing.assert_allclose(
+            mrms.from_accumulation(mrms.to_accumulation(i, dur), dur), i)
+
+
+def test_one_hour_is_the_identity():
+    """Over 60 minutes the two are numerically the same, which is the sanity
+    check that the factor is not inverted."""
+    assert mrms.to_accumulation(17.3, 60) == pytest.approx(17.3)
+
+
+def test_intensity_conversion_broadcasts():
+    import numpy as np
+    np.testing.assert_allclose(mrms.to_accumulation([24, 48], [15, 30]),
+                               [6.0, 24.0])
+
+
+def test_intensity_conversion_rejects_a_nonpositive_duration():
+    for fn in (mrms.to_accumulation, mrms.from_accumulation):
+        with pytest.raises(ValueError, match="duration_min must be positive"):
+            fn(24, 0)

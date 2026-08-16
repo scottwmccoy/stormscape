@@ -806,3 +806,106 @@ def test_burn_cli_accepts_the_portal_ramp_and_the_baer_product(monkeypatch):
     assert got["product"] == "sbs" and got["scheme"] == "brisk"
     assert got["cmap"] == "brisk" and got["fire"] == ["Ward", "Willow"]
     assert got["date"] == "20260814" and got["since"] == "20260101"
+
+
+# --------------------------------------------------------------------------- #
+# BARC4 + severity_mask -- the classes a debris-flow model consumes
+# --------------------------------------------------------------------------- #
+def test_barc4_breaks_are_the_published_values():
+    """BARC4 is quoted in the literature on the dNBR x 1000 scale as
+    125/250/500; stormscape works in plain dNBR."""
+    assert burn.SEVERITY_SCHEMES["barc4"]["breaks"] == (0.125, 0.25, 0.50)
+
+
+def test_barc4_has_four_classes_not_five():
+    """It is NOT the usgs scheme with different numbers -- the class *count*
+    differs too, so indices are not interchangeable between schemes."""
+    assert len(burn.SEVERITY_SCHEMES["barc4"]["labels"]) == 4
+    assert len(burn.SEVERITY_SCHEMES["usgs"]["labels"]) == 5
+
+
+def test_barc4_classifies_at_its_own_breaks():
+    d = np.array([0.0, 0.124, 0.125, 0.30, 0.90], dtype="float32")
+    np.testing.assert_array_equal(burn.classify(d, "barc4"),
+                                  np.array([0, 0, 1, 2, 3], dtype="float32"))
+
+
+def _label(dnbr, scheme):
+    i = int(burn.classify(np.array([dnbr], dtype="float32"), scheme)[0])
+    return burn.SEVERITY_SCHEMES[scheme]["labels"][i]
+
+
+def test_schemes_disagree_where_it_matters():
+    """Class *indices* coincide at some dNBR values, so comparing them is not
+    the test -- what matters is that the same ground gets a different severity
+    name. At 0.55 dNBR, BARC4 says 'high' where the five-class usgs ramp says
+    only 'moderate-high', and a model calibrated on BARC4 would be handed the
+    wrong burned area if the usgs classes were substituted."""
+    assert _label(0.55, "barc4") == "high"
+    assert _label(0.55, "usgs") == "moderate-high"
+    # and the masks that a model would consume genuinely differ
+    d = np.array([0.55], dtype="float32")
+    assert burn.severity_mask(d, "high", scheme="barc4")[0]
+    assert not burn.severity_mask(d, "high", scheme="usgs")[0]
+
+
+def test_severity_mask_selects_named_classes():
+    d = np.array([0.05, 0.20, 0.35, 0.80], dtype="float32")
+    m = burn.severity_mask(d, ("moderate", "high"))
+    np.testing.assert_array_equal(m, [False, False, True, True])
+
+
+def test_severity_mask_defaults_to_barc4_moderate_and_high():
+    """The default is the burned area a post-fire debris-flow model wants."""
+    import inspect
+    sig = inspect.signature(burn.severity_mask)
+    assert sig.parameters["scheme"].default == "barc4"
+    assert tuple(sig.parameters["classes"].default) == ("moderate", "high")
+
+
+def test_severity_mask_accepts_a_single_class_name():
+    d = np.array([0.05, 0.20, 0.35, 0.80], dtype="float32")
+    np.testing.assert_array_equal(burn.severity_mask(d, "high"),
+                                  [False, False, False, True])
+
+
+def test_severity_mask_accepts_class_indices():
+    d = np.array([0.05, 0.20, 0.35, 0.80], dtype="float32")
+    np.testing.assert_array_equal(burn.severity_mask(d, [2, 3]),
+                                  burn.severity_mask(d, ("moderate", "high")))
+
+
+def test_severity_mask_treats_missing_data_as_not_burned():
+    """No observation is not the same as 'did not burn', but it is certainly
+    not 'burned' -- the mask must not smuggle NaN in as True."""
+    d = np.array([np.nan, 0.80], dtype="float32")
+    np.testing.assert_array_equal(burn.severity_mask(d), [False, True])
+
+
+def test_severity_mask_rejects_a_class_the_scheme_lacks():
+    d = np.array([0.5], dtype="float32")
+    with pytest.raises(ValueError, match="unknown severity class"):
+        burn.severity_mask(d, ("moderate-high",))     # usgs-only label
+    with pytest.raises(ValueError, match="outside"):
+        burn.severity_mask(d, [9])
+
+
+def test_severity_mask_rejects_an_unknown_scheme():
+    with pytest.raises(ValueError, match="scheme must be one of"):
+        burn.severity_mask(np.array([0.5]), scheme="nope")
+
+
+def test_barc4_gets_the_literal_baer_palette():
+    """Four classes means the official colour table is used exactly, not
+    sampled -- so a BARC4 map matches a BAER deliverable."""
+    cmap, _, _, labels = burn.severity_colors("barc4")
+    assert len(labels) == 4
+    got = [tuple(round(c * 255) for c in cmap(i)[:3]) for i in range(4)]
+    assert got == list(burn.BAER_CLASS_COLORS)
+
+
+def test_burn_cli_accepts_the_barc4_scheme(monkeypatch):
+    got = _run_burn_cli(monkeypatch,
+                        ["burn", "--bbox", "-115", "39", "-114", "40",
+                         "--scheme", "barc4"])
+    assert got["scheme"] == "barc4"

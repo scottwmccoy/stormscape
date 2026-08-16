@@ -35,7 +35,7 @@ from .atlas14 import (anomaly, climatology_field, fetch_grid, grid_url,
                       pf_point, recurrence_interval, region_for_bounds)
 from .burn import (SEVERITY_SCHEMES, burn_severity, catalog as burn_catalog,
                    classify as burn_classify, fetch_scene, find_scenes,
-                   register_brisk_cmap)
+                   register_brisk_cmap, severity_mask)
 from .compare import (comparison_stats, compare_storm, gauge_recurrence_table,
                       radar_vs_gauge, sample_raster_at_points)
 from .merge import (conditional_merge, local_bias, loo_cross_validate,
@@ -56,7 +56,8 @@ from .mines import (GROUPS as MINE_GROUPS, SOURCES as MINE_SOURCES,
 from .streamflow import (SOURCES as STREAM_SOURCES, fetch_stream_event,
                          flow_summary, load_event_series as load_stream_series,
                          stream_series, stream_sites)
-from .mrms import (compute_i15, fetch, fetch_many, i15_storm_day,
+from .mrms import (compute_i15, fetch, fetch_many, from_accumulation,
+                   i15_storm_day, to_accumulation,
                    multisensor_total, parse_date, save_fields,
                    virtual_gauge_timeseries)
 from .nexrad import (available_scans, beam_blockage, download_scans,
@@ -107,6 +108,7 @@ __all__ = [
     "streams", "roads", "places", "reference_layers",
     "burn_severity", "find_scenes", "burn_catalog", "fetch_scene",
     "burn_classify", "SEVERITY_SCHEMES", "register_brisk_cmap",
+    "severity_mask", "to_accumulation", "from_accumulation",
     "mine_features", "mine_density_grid", "mine_density_raster",
     "mine_group_counts", "mine_group_of", "register_mine_source",
     "MINE_GROUPS", "MINE_SOURCES",
