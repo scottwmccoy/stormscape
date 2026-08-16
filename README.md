@@ -589,8 +589,16 @@ when), and `event_burn.png` draped over the hillshade.
 scene on or before it, so a storm-day map does not include severity mapped after
 the storm. `--since` drops older seasons, `--fire NAME` restricts to one incident,
 and `--product sbs` switches to the BAER **soil** burn severity archive where an
-assessment exists. `--scheme` picks the dNBR breaks: `usgs` (MTBS/USGS
-0.10/0.27/0.44/0.66, the default) or `brisk` (0.10/0.40/0.70).
+assessment exists. `--scheme` picks the dNBR breaks: `usgs` (MTBS/USGS five-class
+0.10/0.27/0.44/0.66, the default), `brisk` (0.10/0.40/0.70), or **`barc4`**
+(0.125/0.25/0.50) — the four-class scheme the **USGS post-fire debris-flow
+models are calibrated on**. Use `barc4` whenever the classes feed a model rather
+than a figure: the schemes differ in both break values *and* class count, so a
+cell at dNBR 0.55 is `high` under BARC4 but only `moderate-high` under `usgs`,
+and substituting one for the other hands the model a different burned area.
+`stormscape.burn.severity_mask(dnbr, ("moderate", "high"))` returns that burned
+area directly as a boolean mask (BARC4 by default), which is the form the models
+want.
 
 Maps are drawn in the **BAER class palette** and **banded into severity classes**,
 the way burn severity is published — the colour bar carries class names rather than

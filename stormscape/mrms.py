@@ -176,6 +176,36 @@ def compute_i15(stack):
     return (i16 + i14) / 2
 
 
+def to_accumulation(intensity_mmph, duration_min):
+    """Rainfall **intensity** (mm/h) -> **accumulation** (mm over the duration).
+
+    stormscape reports peak rainfall as an intensity -- ``i15`` is mm/h averaged
+    over the worst 15 minutes -- because that is how radar rates and gauge
+    metrics are quoted. Several post-fire debris-flow models want the same storm
+    expressed as a depth accumulated over that duration instead, and the two
+    differ by a factor of ``duration / 60``, which is easy to carry the wrong way
+    round: an i15 of 24 mm/h is **6 mm** accumulated in those 15 minutes, not 24.
+
+    Accepts scalars or arrays for either argument (broadcast together), so a
+    whole ``i15max`` field converts in one call.
+    """
+    d = np.asarray(duration_min, dtype="float64")
+    if np.any(d <= 0):
+        raise ValueError("duration_min must be positive")
+    return np.asarray(intensity_mmph, dtype="float64") * d / 60.0
+
+
+def from_accumulation(accumulation_mm, duration_min):
+    """Rainfall **accumulation** (mm over a duration) -> **intensity** (mm/h).
+
+    The inverse of :func:`to_accumulation`; 6 mm in 15 minutes is 24 mm/h.
+    """
+    d = np.asarray(duration_min, dtype="float64")
+    if np.any(d <= 0):
+        raise ValueError("duration_min must be positive")
+    return np.asarray(accumulation_mm, dtype="float64") * 60.0 / d
+
+
 def window_hours(date0=None, scan_pad_h=SCAN_PAD_H, window=None):
     """The hourly stamps to scan: an explicit ``window`` or a storm-day span.
 

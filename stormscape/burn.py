@@ -100,12 +100,28 @@ TIMEOUT = 60.0
 #: dNBR severity breaks. The USGS/MTBS thresholds are published on the x1000
 #: integer scale (100 / 270 / 440 / 660); BRISK's own portal colour scale steps
 #: at 0.10 / 0.40 / 0.70. Class 0 is always "unburned or below the low break".
+#: dNBR break points per classification scheme. Three schemes, and which one you
+#: want depends on what the classes are *for*:
+#:
+#: ``usgs``  the MTBS/USGS five-class dNBR ramp. The default here, and the right
+#:           choice for describing a scar.
+#: ``brisk`` the BRISK portal's own four-class breaks, for matching its imagery.
+#: ``barc4`` **BARC4** -- the four-class scheme the USGS post-fire debris-flow
+#:           models are calibrated against, so this is the one to classify with
+#:           when the output feeds a hazard model rather than a figure. Breaks
+#:           are the published BARC4 values, quoted in the literature on the
+#:           dNBR x 1000 scale as 125 / 250 / 500 and applied here to plain dNBR.
+#:           Note these differ from ``usgs`` in both break values *and* class
+#:           count, so classes are not interchangeable between schemes.
 SEVERITY_SCHEMES = {
     "usgs": dict(
         breaks=(0.10, 0.27, 0.44, 0.66),
         labels=("unburned", "low", "moderate-low", "moderate-high", "high")),
     "brisk": dict(
         breaks=(0.10, 0.40, 0.70),
+        labels=("unburned", "low", "moderate", "high")),
+    "barc4": dict(
+        breaks=(0.125, 0.25, 0.50),
         labels=("unburned", "low", "moderate", "high")),
 }
 
@@ -552,6 +568,51 @@ def classify(dnbr, scheme: str = "usgs"):
     for b in breaks:
         cls += (a >= b).astype("float32")
     return np.where(np.isfinite(a), cls, np.nan).astype("float32")
+
+
+def severity_mask(dnbr, classes=("moderate", "high"), scheme: str = "barc4"):
+    """Boolean mask of the dNBR cells falling in the named severity classes.
+
+    This is the shape a post-fire debris-flow model wants its burned area in:
+    "moderate and high severity", not a continuous index. Defaults to
+    ``barc4`` because that is the scheme those models are calibrated on --
+    masking ``usgs`` classes and feeding them to a model calibrated on BARC4
+    would silently change the burned area.
+
+    ``dnbr`` is a **raw dNBR** array (the ``dnbr`` field of
+    :func:`burn_severity`), not :func:`classify` output -- the classing happens
+    here so the scheme cannot drift between the two steps. ``classes`` names
+    them (``"moderate"``, ``("moderate", "high")``, ...) or gives class indices.
+
+    Cells with no observation are ``False``: "we have no data here" is not
+    "this burned". Count them off ``np.isfinite(dnbr)`` if you need the
+    distinction.
+    """
+    try:
+        labels = SEVERITY_SCHEMES[scheme]["labels"]
+    except KeyError:
+        raise ValueError(f"scheme must be one of {sorted(SEVERITY_SCHEMES)}, "
+                         f"got {scheme!r}") from None
+    if isinstance(classes, (str, int, np.integer)):
+        classes = [classes]
+    wanted = set()
+    for c in classes:
+        if isinstance(c, (int, np.integer)) and not isinstance(c, bool):
+            if not 0 <= int(c) < len(labels):
+                raise ValueError(f"class index {c} outside 0..{len(labels) - 1} "
+                                 f"for scheme {scheme!r}")
+            wanted.add(int(c))
+            continue
+        key = str(c).strip().lower()
+        if key not in labels:
+            raise ValueError(f"unknown severity class {c!r} for scheme "
+                             f"{scheme!r}; have {list(labels)}")
+        wanted.add(labels.index(key))
+    cls = classify(dnbr, scheme=scheme)
+    out = np.zeros(cls.shape, dtype=bool)
+    for i in sorted(wanted):
+        out |= (cls == i)
+    return out & np.isfinite(cls)
 
 
 def burn_severity(aoi, date=None, product: str = "dnbr", scheme: str = "usgs",

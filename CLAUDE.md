@@ -1252,8 +1252,53 @@ in `README.md`.
   `tests/test_streamflow.py` (56, offline — `requests.get` replaced by a
   replaying double).
 
+- **What we take from USGS `pfdf`, and why almost nothing (2026-08-16).**
+  `pfdf` is the USGS post-fire debris-flow package that the sibling **firescape**
+  project is built on (`~/git/code/firescape`, FireMan env). **firescape depends
+  on stormscape**, not the reverse — stormscape is the generic lower layer, so it
+  must not grow hazard modelling.
+  **TWO HARD BLOCKERS on importing or copying pfdf code:**
+  (a) **pfdf is GPL-3.0-only; stormscape is MIT.** Copying pfdf source in would
+  violate its licence, and depending on it drags copyleft onto an MIT package.
+  (b) **pfdf is not on PyPI** (`pypi.org/pypi/pfdf/json` → 404; it ships only from
+  the USGS registry `code.usgs.gov/api/v4/groups/859/...`), while stormscape's CI
+  guards that `pip install stormscape` resolves from PyPI. A pfdf dependency
+  breaks that documented invariant.
+  So stormscape **imports nothing from pfdf** and only mentions it in comments.
+  Published thresholds and unit conversions are facts, not expression — those are
+  reimplemented from the literature, never transcribed from pfdf source.
+  **Three things taken that way (2026-08-16):**
+  1. **`SEVERITY_SCHEMES["barc4"]`** — breaks `(0.125, 0.25, 0.50)`, four classes.
+     This is the scheme the **USGS post-fire debris-flow models are calibrated
+     on** (quoted in the literature on the dNBR×1000 scale as 125/250/500).
+     stormscape's `usgs` scheme is the **MTBS five-class** ramp
+     (0.10/0.27/0.44/0.66) and is NOT interchangeable: breaks *and* class count
+     differ, so at dNBR 0.55 BARC4 says **high** where `usgs` says
+     **moderate-high**, and substituting one hands a model a different burned
+     area. Four classes means `severity_colors` uses the literal
+     `BAER_CLASS_COLORS` table (not the sampled 5-class path). CLI
+     `burn --scheme barc4`.
+  2. **`burn.severity_mask(dnbr, ("moderate","high"), scheme="barc4")`** — the
+     burned-area boolean a debris-flow model consumes. Takes **raw dNBR**, not
+     `classify()` output, so the scheme cannot drift between the two steps;
+     accepts class names or indices; **NaN → False** (no observation is not
+     "burned"). Defaults to barc4 for the reason above.
+  3. **`mrms.to_accumulation` / `from_accumulation`** — intensity (mm/h) ↔
+     accumulation (mm over a duration), factor `duration/60`. stormscape reports
+     i15 as an intensity; Staley-2017 wants a depth. **i15 24 mm/h = 6 mm in 15
+     min, not 24** — the trap firescape's own notes flag. Broadcasts, so a whole
+     i15max field converts in one call; 60 min is the identity (the check that
+     the factor is not inverted).
+  **Deliberately NOT taken:** `models/` (staley2017/gartner2014/cannon2010),
+  `segments/`, `watershed.py` — firescape's core, and the GPL part least worth
+  entangling; `raster/` — stormscape uses rioxarray directly; `data/landfire/`
+  and `data/usgs/statsgo.py` — firescape has `landfire.py` / `soils.py`;
+  `data/noaa/atlas14.py` — stormscape deliberately went gridded because that one
+  is point-only; `data/usgs/tnm/` — stormscape has py3dep + the ArcGIS REST
+  equivalents; `data/retainments/la_county.py` — LA County only.
+
 - **Testing (`tests/`, pytest, added 2026-07-29) — run it before every push.**
-  `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **537 tests,
+  `pytest` (or `/opt/anaconda3/envs/GISMan/bin/python -m pytest`) — **557 tests,
   ~2 s, entirely offline** (no MRMS/NEXRAD/Synoptic/3DEP/Atlas 14/USMIN/NWIS request,
   no token), so it is cheap enough to run constantly. Config lives in
   `pyproject.toml` (`[tool.pytest.ini_options]`, `--strict-markers`); install the

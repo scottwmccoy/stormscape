@@ -6,7 +6,7 @@ run that for the authoritative, always-current text.
 
 ```
 stormscape {dem, i15, map, run, gauges, compare, nexrad, panels, vgauge, zoom,
-            pick, climate, smooth, recurrence, export, burn}
+            pick, climate, smooth, recurrence, export, burn, mines, flow}
 ```
 
 | Command | Purpose |
@@ -27,6 +27,8 @@ stormscape {dem, i15, map, run, gauges, compare, nexrad, panels, vgauge, zoom,
 | `recurrence` | Wet-gauge table: peak I15/I30/I60 + time-of-peak, anomaly + recurrence interval vs NOAA Atlas 14 (PFDS point query) |
 | `export` | Georeferenced EPSG:3857 GeoTIFFs + GeoPDF figures + NHD stream vectors for GIS / CalTopo (reuses rasters; no re-run) |
 | `burn` | Near-real-time burn severity over an AOI from CIMSS BRISK daily dNBR (or the BAER soil-burn-severity archive) |
+| `mines` | Abandoned-mine features (USGS USMIN) — dumps, tailings, adits, shafts — as points or a per-km² density surface |
+| `flow` | USGS stream gauges in the AOI — discharge + stage hydrographs, on the map and against the rain |
 
 The AOI is **always** given as either `--bbox W S E N` (lon/lat degrees) or
 `--aoi <vector file>` (GeoJSON/SHP/GPKG/KMZ). Gauge steps need a free Synoptic
@@ -522,7 +524,7 @@ Groups **A + C**, plus:
 | `--since YYYYMMDD` | str | ignore scenes older than this (e.g. to drop last season's fires) |
 | `--product {dnbr,sbs,baer_dnbr}` | `dnbr` | `dnbr` = BRISK daily composite; `sbs` = BAER **soil** burn severity, authoritative but only for assessed fires; `baer_dnbr` = the BAER teams' own dNBR (2025 only so far) |
 | `--min-age DAYS` | float | require the composite to be at least DAYS old (since the fire entered the archive) and skip fires that are not, naming them. Off by default — an immature scar still beats none, and the run says so |
-| `--scheme {usgs,brisk}` | `usgs` | dNBR severity breaks: USGS/MTBS `0.10/0.27/0.44/0.66`, or the portal's `0.10/0.40/0.70` |
+| `--scheme {usgs,brisk,barc4}` | `usgs` | dNBR severity breaks: USGS/MTBS five-class `0.10/0.27/0.44/0.66`, the portal's `0.10/0.40/0.70`, or **`barc4`** `0.125/0.25/0.50` — the four-class scheme the USGS post-fire debris-flow models are calibrated on. Use it when the classes feed a model rather than a figure |
 | `--fire NAME…` | strs | restrict to these fires (names as printed by `--list`) |
 | `--years Y…` | ints | archive years to search (default: this year and last) |
 | `--list` | flag | list the fires intersecting the AOI and stop — **downloads nothing** |

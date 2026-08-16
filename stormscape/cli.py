@@ -2754,9 +2754,14 @@ def main(argv=None):
                          "with BAER's own dNBR settles (examples/brisk_vs_baer.py). "
                          "Off by default: an immature scar still beats none, and "
                          "the run says so.")
-    pb.add_argument("--scheme", default="usgs", choices=["usgs", "brisk"],
-                    help="dNBR severity breaks: usgs = MTBS/USGS 0.10/0.27/0.44/"
-                         "0.66 (default), brisk = the portal's 0.10/0.40/0.70")
+    pb.add_argument("--scheme", default="usgs",
+                    choices=["usgs", "brisk", "barc4"],
+                    help="dNBR severity breaks: usgs = MTBS/USGS five-class "
+                         "0.10/0.27/0.44/0.66 (default), brisk = the portal's "
+                         "0.10/0.40/0.70, barc4 = the four-class 0.125/0.25/0.50 "
+                         "scheme the USGS post-fire debris-flow models are "
+                         "calibrated on -- use it when the classes feed a model "
+                         "rather than a figure")
     pb.add_argument("--fire", nargs="+", metavar="NAME",
                     help="restrict to these fire names (as listed by --list)")
     pb.add_argument("--years", type=int, nargs="+", metavar="Y",
