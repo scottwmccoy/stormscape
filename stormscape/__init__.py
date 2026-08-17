@@ -65,9 +65,10 @@ from .nexrad import (available_scans, beam_blockage, download_scans,
                      nearest_scan, radar_location, read_sweep,
                      reflectivity_composite, reflectivity_field,
                      sample_radar_at_points, z_to_rate)
-from .plot import (add_gauges, add_reference, anomaly_map, bbox_picker,
-                   climatology_comparison, diagnostic_panels, drape_i15,
-                   plot_virtual_gauge, smoothing_comparison,
+from .plot import (Labeller, add_gauges, add_reference, anomaly_map,
+                   bbox_picker, climatology_comparison, diagnostic_panels,
+                   drape_i15, interior_point, longest_per_name,
+                   plot_virtual_gauge, shorten, smoothing_comparison,
                    smoothing_skill_plot, virtual_gauge_atlas,
                    virtual_gauge_detail)
 from .refdata import places, reference_layers, roads, streams
@@ -94,6 +95,7 @@ __all__ = [
     "nearest_scan", "read_sweep", "lowest_tilt_grid", "reflectivity_field",
     "reflectivity_composite", "sample_radar_at_points", "z_to_rate",
     "intensity_stack", "beam_blockage",
+    "Labeller", "shorten", "interior_point", "longest_per_name",
     "drape_i15", "add_reference", "add_gauges", "diagnostic_panels",
     "virtual_gauge_timeseries", "plot_virtual_gauge", "virtual_gauge_atlas",
     "virtual_gauge_detail", "bbox_picker",
