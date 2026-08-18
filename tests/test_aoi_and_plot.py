@@ -249,3 +249,21 @@ def test_labels_avoid_registered_markers(label_ax):
     blocked = (px - 20, py - 20, px + 20, py + 20)
     assert (x1 < blocked[0] or x0 > blocked[2]
             or y1 < blocked[1] or y0 > blocked[3])
+
+
+def test_interior_point_accepts_a_polygon():
+    """Lakes arrive alongside the lines; a polygon has no coordinate sequence
+    of its own, so the exterior ring is what gets sampled."""
+    from shapely.geometry import Polygon
+
+    lake = Polygon([(1, 1), (60, 1), (60, 40), (1, 40)])
+    pt = plot.interior_point(lake, (0, 0, 100, 100))
+    assert pt is not None and 0 < pt[0] < 100 and 0 < pt[1] < 100
+
+
+def test_interior_point_accepts_a_multipolygon():
+    from shapely.geometry import MultiPolygon, Polygon
+
+    mp = MultiPolygon([Polygon([(1, 1), (5, 1), (5, 5)]),
+                       Polygon([(40, 40), (60, 40), (60, 60), (40, 60)])])
+    assert plot.interior_point(mp, (0, 0, 100, 100)) is not None

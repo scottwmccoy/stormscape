@@ -47,7 +47,8 @@ from .merge import (conditional_merge, local_bias, loo_cross_validate,
 from .dem import (coverage_fraction, dem_sources, fetch_dem_and_hillshade,
                   get_dem, hillshade)
 from .export import (DEFAULT_EXPORT_FIELDS, export_geotiffs, export_streams,
-                     figure_to_geopdf, geopdf_supported, reproject_geotiff)
+                     figure_to_geopdf, geopdf_supported, reproject_geotiff,
+                     write_rgba)
 from .gauges import (fetch_gauge_event, gauge_fields, gauge_intensities,
                      gauge_timeseries, get_rainfall as gauge_rainfall,
                      get_stations as gauge_stations, load_event_series,
@@ -111,6 +112,7 @@ __all__ = [
     "smoothing_comparison", "smoothing_skill_plot",
     "reproject_geotiff", "export_geotiffs", "export_streams",
     "figure_to_geopdf", "geopdf_supported", "DEFAULT_EXPORT_FIELDS",
+    "write_rgba",
     "CaltopoLayer", "caltopo_build", "caltopo_write", "caltopo_folder",
     "caltopo_classify", "caltopo_class_labels", "caltopo_summary",
     "CALTOPO_CLASS_COLORS",

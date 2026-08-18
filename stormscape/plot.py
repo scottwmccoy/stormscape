@@ -163,7 +163,12 @@ def interior_point(geom, bounds):
     w, s, e, n = bounds
     coords = []
     for part in getattr(geom, "geoms", [geom]):
-        coords.extend(list(part.coords))
+        # A polygon has no coordinate sequence of its own -- asking for one
+        # raises -- so take its exterior ring. Lakes and reservoirs arrive
+        # here as polygons alongside the lines.
+        ring = getattr(part, "exterior", None)
+        seq = ring.coords if ring is not None else getattr(part, "coords", ())
+        coords.extend(list(seq))
     if not coords:
         return None
     step = max(1, len(coords) // 60)
