@@ -381,6 +381,33 @@ radar sources. In Python: `mrms.virtual_gauge_timeseries` /
 which takes `{source_label: {name: df}}` plus a `real_series` overlay, and
 `plot.virtual_gauge_detail(sources, name, real_series=)` for one gauge's 4-row figure.
 
+### The estimator triangle and sub-beam evaporation
+
+Three independent rate retrievals from the same lowest-tilt data
+(`--method za|kdp|zzdr` on `nexrad --intensity` and `vgauge`):
+
+| method | relation | fails when |
+|---|---|---|
+| `za` | capped convective Z=300R^1.4 | big drops, hail (over-reads) |
+| `kdp` | R(Kdp), ice-blind | δ (backscatter phase) bumps, melting hail |
+| `zzdr` | R(Z,ZDR) = 0.0142 Z^0.77 Zdr^-1.67 (WSR-88D operational, Giangrande & Ryzhkov 2008) | ZDR miscalibration |
+
+Where all three agree, trust the number; where one departs, its failure mode
+names the suspect. All beam-level estimates still miss what happens *below*
+the beam — `subbeam` applies a first-order bulk evaporation correction:
+
+```bash
+# RH from the nearest radiosonde launch (NWS 00Z ~ 5 pm local = monsoon peak)
+python -m stormscape subbeam --rate out/rasters/krgx13_i15max.tif     --dem out/rasters/event_dem.tif --radar KRGX --tilt-deg 0.0     --sounding REV --time 202608132100 --out-dir ./out --key ev13
+```
+
+Model: dR/dz = −a(1−RH)R^0.65 integrated over the per-cell beam height AGL
+(closed form), RH the sounding's layer mean between ground and beam. Writes
+the corrected field + an evaporated-fraction map. First-order by design —
+coefficients exposed, output best read as sensitivity. A storm-time sounding
+is often convectively moistened; on the motivating case (RH 0.55) the
+correction was ~10%, which *ruled out* evaporation as the residual bias.
+
 ### Virga-risk mask — does the mosaic intensity have low-level support?
 
 In dry-boundary-layer convection (Great Basin monsoon), a mosaic QPE can grid

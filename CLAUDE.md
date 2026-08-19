@@ -941,6 +941,25 @@ in `README.md`.
   want the most intense hours only. Tests cover the truncating case, the dropped
   hour being the *weakest* not the last, the shortened span, and — importantly —
   that the sub-cap and all-dry-fallback paths stay silent.
+- **Estimator triangle + sub-beam evaporation (`--method zzdr`,
+  `subbeam.py`, CLI `subbeam`, 2026-08-15).** Third rate retrieval:
+  R(Z,ZDR) (WSR-88D operational, Giangrande & Ryzhkov 2008), gridded from the
+  directly-recorded ZDR field (no retrieval step, unlike Kdp), blended with
+  capped Z-R below `z_blend` like `kdp`. ZDR clipped to [0, 4] dB (outside =
+  noise/calibration, obeying it would be worse than ignoring it). The point of
+  three retrievals: each fails differently (za: big drops/hail high; kdp: δ
+  bumps/melting hail; zzdr: ZDR calibration), so agreement is evidence and the
+  odd one out names its own failure mode. `subbeam.py`: closed-form bulk
+  evaporation below the beam, dR/dz=-a(1-RH)R^0.65, per-cell beam AGL from
+  radar geometry + DEM; RH from the nearest radiosonde via **IEM RAOB JSON**
+  (the old weather.uwyo.edu cgi endpoint is retired and 404s — a saved Wyoming
+  TEXT:LIST still parses). REV launches at 00Z = ~5 pm PDT, right at Great
+  Basin monsoon peak. Field-validated negative result on the motivating case:
+  the storm-time sub-beam layer was RH 0.55 (convectively moistened), the
+  correction only ~10% — which RULED OUT evaporation as the SE-core bias and
+  shifted suspicion to δ-contaminated Kdp. Tests: `tests/test_subbeam.py`
+  (model limits, R&M88 calibration anchor, Magnus RH, sounding parse, raster
+  geometry, zzdr truth table incl. the observed 50 dBZ / ZDR 2.3 core).
 - **Virga-risk mask (`virga.py`, CLI `virga`, 2026-08-15).** Born from the
   Stallion Fire radar-bias investigation: MRMS mapped 34 mm/h i15 over Paiute
   Creek while the in-perimeter radar's own lowest tilt read ~1 mm under BOTH

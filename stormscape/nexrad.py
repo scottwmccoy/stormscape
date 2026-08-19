@@ -538,6 +538,55 @@ def _multi_to_result(fields: dict, xs, ys, aeqd_crs, bounds, meta) -> dict:
 _RKDP_S = (44.0, 0.822)                                         # alpha, beta
 _KDP_CLIP = (0.0, 7.0)                                          # deg/km
 
+# WSR-88D operational dual-pol R(Z, ZDR) for rain (Giangrande & Ryzhkov 2008):
+# R = 0.0142 Z^0.770 Zdr_lin^-1.67  (Z linear mm6/m3, Zdr as a linear ratio).
+# The negative ZDR exponent is the point: at a given Z, larger drops (higher
+# ZDR) mean fewer drops and LESS rain -- the correction a fixed Z-R cannot make.
+_RZZDR = (0.0142, 0.770, -1.67)
+_ZDR_RAIN_DB = (0.0, 4.0)       # rain-plausible ZDR; outside = noise/cal issues
+
+
+def zzdr_to_rate(dbz, zdr_db, dbz_cap: Optional[float] = None) -> np.ndarray:
+    """Rain rate (mm/h) from reflectivity + differential reflectivity.
+
+    The operational WSR-88D dual-pol relation (:data:`_RZZDR`). ZDR is clipped
+    to the rain-plausible window (:data:`_ZDR_RAIN_DB`); where ZDR is not
+    finite the caller should fall back to Z-R (this function returns NaN
+    there). ``dbz_cap`` applies the same hail cap as :func:`z_to_rate`.
+    """
+    dbz = np.asarray(dbz, dtype=float)
+    zdr = np.asarray(zdr_db, dtype=float)
+    if dbz_cap is not None:
+        dbz = np.minimum(dbz, dbz_cap)
+    z = np.power(10.0, dbz / 10.0)
+    zdr_lin = np.power(10.0, np.clip(zdr, *_ZDR_RAIN_DB) / 10.0)
+    c, az, bz = _RZZDR
+    out = c * np.power(z, az) * np.power(zdr_lin, bz)
+    return np.where(np.isfinite(zdr), out, np.nan)
+
+
+def _rates_zzdr(radar, low, xs, ys, a, b, dbz_cap, z_blend):
+    """v3 rate grids: R(Z, ZDR) where moderate/heavy, capped Z-R elsewhere.
+
+    Same blend policy as :func:`_rates_kdp` -- dual-pol relations are noisy in
+    light rain, so R(Z,ZDR) applies only at/above ``z_blend`` dBZ. ZDR is a
+    directly recorded field, so unlike Kdp no retrieval step is needed;
+    single-pol volumes fall back to pure capped Z-R.
+    """
+    sub = radar.extract_sweeps([s for s, _ in low])
+    out = []
+    for k in range(sub.nsweeps):
+        dbz = _grid_sweep(sub, "reflectivity", k, xs, ys)
+        rz = z_to_rate(dbz, a=a, b=b, dbz_cap=dbz_cap)
+        if "differential_reflectivity" not in sub.fields:
+            out.append(rz)
+            continue
+        zdr = _grid_sweep(sub, "differential_reflectivity", k, xs, ys)
+        rzz = zzdr_to_rate(dbz, zdr, dbz_cap=dbz_cap)
+        use = np.isfinite(rzz) & (dbz >= z_blend)
+        out.append(np.where(use, rzz, rz))
+    return out
+
 
 def _rates_kdp(radar, low, xs, ys, a, b, dbz_cap, z_blend):
     """v2 dual-pol rate grids for the given low cuts (one per cut).
@@ -624,6 +673,8 @@ def intensity_stack(aoi, start: datetime, end: datetime,
                 continue
             if method == "kdp":
                 rates = _rates_kdp(rad, low, xs, ys, a, b, dbz_cap, z_blend)
+            elif method == "zzdr":
+                rates = _rates_zzdr(rad, low, xs, ys, a, b, dbz_cap, z_blend)
             else:
                 rates = [z_to_rate(_grid_sweep(rad, "reflectivity", si, xs, ys),
                                    a=a, b=b, dbz_cap=dbz_cap) for si, _ in low]
@@ -663,9 +714,9 @@ def intensity_stack(aoi, start: datetime, end: datetime,
         except Exception as exc:                               # noqa: BLE001
             warnings.warn(f"beam-blockage skipped: {exc}")
     cad = float(np.median(np.diff(times)) / 60.0) if len(times) > 1 else float("nan")
-    src = ("NEXRAD L2 i15 stack: R(Kdp) blended with capped Z-R"
-           if method == "kdp" else
-           "NEXRAD L2 i15 stack: capped convective Z-R")
+    src = {"kdp": "NEXRAD L2 i15 stack: R(Kdp) blended with capped Z-R",
+           "zzdr": "NEXRAD L2 i15 stack: R(Z,ZDR) blended with capped Z-R",
+           }.get(method, "NEXRAD L2 i15 stack: capped convective Z-R")
     meta = {"source": src, "radar": rid, "method": method,
             "zr_a": a, "zr_b": b, "dbz_cap": dbz_cap, "rate_cap": rate_cap,
             "res_m": float(res_m), "n_volumes": nvol, "n_low_cuts": int(len(times)),
@@ -673,6 +724,9 @@ def intensity_stack(aoi, start: datetime, end: datetime,
             "aoi_i15max": round(float(np.nanmax(fields["i15max"])), 1)}
     if method == "kdp":
         meta.update(kdp_alpha=_RKDP_S[0], kdp_beta=_RKDP_S[1], z_blend_dbz=z_blend)
+    elif method == "zzdr":
+        meta.update(zzdr_c=_RZZDR[0], zzdr_zexp=_RZZDR[1], zzdr_zdrexp=_RZZDR[2],
+                    z_blend_dbz=z_blend)
     meta.update(blk)
     return _multi_to_result(fields, xs, ys, crs, bounds, meta)
 
@@ -800,6 +854,12 @@ def virtual_gauge_timeseries(points, start: datetime, end: datetime,
                                            ) ** _RKDP_S[1]
                 rate = np.where(np.isfinite(rk) & (rk > 0) & (dbz >= z_blend),
                                 rk, rz)
+            elif (method == "zzdr"
+                  and "differential_reflectivity" in sub.fields):
+                zv = sample_radar_at_points(
+                    sub, g, field="differential_reflectivity", sweep=k)
+                rzz = zzdr_to_rate(dbz, zv, dbz_cap=dbz_cap)
+                rate = np.where(np.isfinite(rzz) & (dbz >= z_blend), rzz, rz)
             else:
                 rate = rz
             if rate_cap is not None:

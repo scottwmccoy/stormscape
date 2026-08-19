@@ -926,6 +926,41 @@ def _nexrad_when(args):
     return start + (end - start) / 2
 
 
+def _cmd_subbeam(args):
+    import datetime as dt
+
+    from .nexrad import radar_location
+    from .subbeam import fetch_sounding, mean_rh, subbeam_correct
+    os.makedirs(args.out_dir, exist_ok=True)
+    lat, lon, elev = radar_location(args.radar.upper())
+    rh, rh_src = args.rh, "manual"
+    if rh is None:
+        when = (dt.datetime.strptime(args.time, "%Y%m%d%H%M")
+                if args.time else None)
+        prof_df = fetch_sounding(args.sounding, when)
+        import rasterio
+        with rasterio.open(args.dem) as ds:
+            import numpy as _np
+            g = ds.read(1, out_shape=(min(200, ds.height),
+                                      min(200, ds.width))).astype("float64")
+            nod = ds.nodata
+            if nod is not None:
+                g[g == nod] = _np.nan
+            ground = float(_np.nanmedian(g))
+        beam = elev + 500.0                       # first-order layer top
+        rh = mean_rh(prof_df, ground, max(beam, ground + 300.0))
+        rh_src = f"{args.sounding} sounding {prof_df.attrs.get('valid', '?')}"
+    res = subbeam_correct(args.rate, args.dem, (lon, lat), elev,
+                          args.out_dir, args.key or "subbeam", rh=rh,
+                          tilt_deg=args.tilt_deg, a=args.evap_a,
+                          b=args.evap_b)
+    res["rh_source"] = rh_src
+    print(json.dumps({k: v for k, v in res.items()
+                      if not k.endswith("_tif")}, indent=2))
+    print(f"wrote {res['subbeam_tif']}")
+    print(f"wrote {res['evapfrac_tif']}")
+
+
 def _cmd_virga(args):
     from .nexrad import radar_location
     from .virga import virga_mask
@@ -2056,7 +2091,7 @@ def _add_gauges_pipeline_opts(p):
     p.add_argument("--no-multisensor", action="store_true",
                    help="skip the hourly gauge-corrected MultiSensor QPE (MRMS) overlay")
     p.add_argument("--radar", help="NEXRAD radar id (nearest to the AOI if unset)")
-    p.add_argument("--method", choices=["za", "kdp"], default="kdp",
+    p.add_argument("--method", choices=["za", "kdp", "zzdr"], default="kdp",
                    help="NEXRAD rate recipe for the VG series (default kdp)")
     p.add_argument("--cache-dir", help="NEXRAD volume cache dir "
                                        "(default <out-dir>/nexrad_cache)")
@@ -2396,9 +2431,9 @@ def main(argv=None):
                     help="hail cap (dBZ) before Z-R conversion (default 53)")
     pn.add_argument("--no-hail-cap", action="store_true",
                     help="disable the dBZ hail cap (raw convective Z-R)")
-    pn.add_argument("--method", choices=["za", "kdp"], default="za",
+    pn.add_argument("--method", choices=["za", "kdp", "zzdr"], default="za",
                     help="--intensity rate: za = capped convective Z-R (v1, all "
-                         "eras); kdp = dual-pol R(Kdp) blended with Z-R (v2, 2012+)")
+                         "eras); kdp = dual-pol R(Kdp) blended with Z-R (v2, 2012+); zzdr = R(Z,ZDR), big-drop/DSD-robust (v3, 2012+)")
     pn.add_argument("--z-blend", type=float, default=35.0,
                     help="--method kdp: use R(Kdp) at/above this dBZ, capped Z-R "
                          "below (default 35)")
@@ -2431,6 +2466,32 @@ def main(argv=None):
     _add_stream_overlay_opts(pn)
     pn.set_defaults(func=_cmd_nexrad)
 
+
+
+    psb = sub.add_parser(
+        "subbeam",
+        help="sub-beam evaporation correction for a radar rate field")
+    psb.add_argument("--rate", required=True,
+                     help="rate-like tif to correct (e.g. <key>_i15max.tif)")
+    psb.add_argument("--dem", required=True, help="DEM tif (any grid)")
+    psb.add_argument("--radar", required=True,
+                     help="four-letter radar id (site elevation + location)")
+    psb.add_argument("--tilt-deg", type=float, default=0.5,
+                     help="lowest-tilt elevation angle (default 0.5; KRGX 0.0)")
+    psb.add_argument("--rh", type=float,
+                     help="layer-mean sub-beam RH 0..1 (skips the sounding)")
+    psb.add_argument("--sounding", default="REV",
+                     help="radiosonde station for RH (default REV; 00Z/12Z)")
+    psb.add_argument("--time", help="UTC time YYYYMMDDHHMM -> nearest launch")
+    psb.add_argument("--evap-a", type=float, default=1.0,
+                     help="evaporation coefficient a in dR/dz=-a(1-RH)R^b")
+    psb.add_argument("--evap-b", type=float, default=0.65,
+                     help="evaporation exponent b (default 0.65)")
+    psb.add_argument("--out-dir", default=".", help="output directory")
+    psb.add_argument("--key", help="filename stem (default 'subbeam')")
+    psb.add_argument("--flat", action="store_true",
+                     help="write products straight into --out-dir")
+    psb.set_defaults(func=_cmd_subbeam)
 
     pvg = sub.add_parser(
         "virga",
@@ -2541,7 +2602,7 @@ def main(argv=None):
                     help="also include the single-radar NEXRAD L2 series "
                          "alongside MRMS on the atlas/CSVs (>=2020 events)")
     pv.add_argument("--radar", help="NEXRAD radar id for --source nexrad (nearest if unset)")
-    pv.add_argument("--method", choices=["za", "kdp"], default="kdp",
+    pv.add_argument("--method", choices=["za", "kdp", "zzdr"], default="kdp",
                     help="--source nexrad rate recipe (default kdp)")
     pv.add_argument("--cache-dir", help="NEXRAD volume cache dir (--source nexrad)")
     pv.add_argument("--dpi", type=int, default=200)
