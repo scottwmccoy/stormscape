@@ -941,6 +941,21 @@ in `README.md`.
   want the most intense hours only. Tests cover the truncating case, the dropped
   hour being the *weakest* not the last, the shortened span, and — importantly —
   that the sub-cap and all-dry-fallback paths stay silent.
+- **Hydro blend (`--method hydro`, 2026-08-15) — the reconnaissance rainfield.**
+  Motivated by the Stallion finding that per-estimator i15 stacks ACCUMULATE
+  each relation's failures (the running max is irreversible), so relation
+  selection must happen per gate per scan, before stacking. CSU-HIDRO /
+  WSR-88D-dual-pol-QPE-style tree: censor ρHV<0.85; Z<35 → capped Z-R;
+  Z≥45 & ZDR≤0.8 (hail: tumbling ice looks isotropic) → R(Kdp) capped at
+  1.5× Z-R (the δ guard — added because a marginal-Z Kdp blow-up 4-6× both
+  Z-based estimators was OBSERVED with no hail signature); else R(Z,ZDR).
+  Each branch is validated by a specific Stallion case, pinned in
+  `tests/test_hydro.py`. Also emits `i15max_lo/hi` + `total_lo/hi`
+  (per-cell envelope over the defensibly-applicable relations — R(Z,ZDR) is
+  EXCLUDED from the envelope in hail cells where it reads ice as small drops)
+  and `relmode` (modal relation, float codes 1-4). Single-pol volumes degrade
+  to pure Z-R with a point envelope. vgauge supports `--method hydro` too
+  (blend only, no envelope columns).
 - **Estimator triangle + sub-beam evaporation (`--method zzdr`,
   `subbeam.py`, CLI `subbeam`, 2026-08-15).** Third rate retrieval:
   R(Z,ZDR) (WSR-88D operational, Giangrande & Ryzhkov 2008), gridded from the

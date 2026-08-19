@@ -588,6 +588,107 @@ def _rates_zzdr(radar, low, xs, ys, a, b, dbz_cap, z_blend):
     return out
 
 
+# Hydro blend: per-gate relation selection (CSU-HIDRO / WSR-88D dual-pol QPE
+# style decision tree). Class codes written to the `relmode` product.
+HYDRO_DRY, HYDRO_ZR, HYDRO_ZZDR, HYDRO_KDP_HAIL, HYDRO_CENSORED = 0, 1, 2, 3, 4
+_HAIL_DBZ = 45.0     # hail suspicion: strong Z ...
+_HAIL_ZDR = 0.8      # ... with small ZDR (dB) -- tumbling ice looks isotropic
+_RHOHV_MIN = 0.85    # below this the echo is not meteorological
+_KDP_GUARD = 1.5     # cap R(Kdp) at this x capped Z-R (backscatter-phase guard)
+
+
+def hydro_select(dbz, zdr, rhohv, r_z, r_kdp, r_zzdr, z_blend: float = 35.0):
+    """Per-cell relation selection -> (rate, lo, hi, class).
+
+    The decision tree, each branch validated on the Aug 2026 Stallion storms:
+
+    - ``rhohv < 0.85``            -> censor to 0 (non-meteorological echo)
+    - ``dbz < z_blend``           -> capped Z-R (dual-pol too noisy in light rain)
+    - ``dbz >= 45 & zdr <= 0.8``  -> **hail**: R(Kdp) (ice-blind), capped at
+      1.5x the capped Z-R -- the backscatter-phase guard, added because a
+      marginal-Z R(Kdp) blow-up (4-6x both Z-based estimators) was observed
+      where no hail signature existed
+    - otherwise (rain, moderate+) -> R(Z,ZDR) (DSD-robust)
+
+    ``lo``/``hi`` bound each cell by the relations *defensibly applicable*
+    there: {Z-R, R(Z,ZDR)} in rain, {R(Kdp), Z-R} in hail (R(Z,ZDR) blows up
+    in hail and is excluded), the single Z-R in light rain. A reconnaissance
+    field that carries its own spread cannot quietly overstate confidence.
+    """
+    dbz = np.asarray(dbz, dtype="float64")
+    fin = np.isfinite(dbz)
+    rate = np.where(fin, r_z, np.nan)
+    lo = rate.copy()
+    hi = rate.copy()
+    cls = np.where(fin, HYDRO_ZR, HYDRO_DRY).astype("uint8")
+
+    zdr_ok = zdr is not None and np.isfinite(np.asarray(zdr, dtype="float64")).any()
+    if zdr_ok:
+        zdr = np.asarray(zdr, dtype="float64")
+        m_rain = fin & (dbz >= z_blend) & np.isfinite(r_zzdr)
+        rate = np.where(m_rain, r_zzdr, rate)
+        lo = np.where(m_rain, np.fmin(r_z, r_zzdr), lo)
+        hi = np.where(m_rain, np.fmax(r_z, r_zzdr), hi)
+        cls = np.where(m_rain, HYDRO_ZZDR, cls).astype("uint8")
+
+        m_hail = fin & (dbz >= _HAIL_DBZ) & np.isfinite(zdr) & (zdr <= _HAIL_ZDR)
+        rk = np.where(np.isfinite(r_kdp) & (r_kdp > 0),
+                      np.fmin(r_kdp, _KDP_GUARD * r_z), r_z)
+        rate = np.where(m_hail, rk, rate)
+        lo = np.where(m_hail, np.fmin(rk, r_z), lo)
+        hi = np.where(m_hail, np.fmax(rk, r_z), hi)
+        cls = np.where(m_hail, HYDRO_KDP_HAIL, cls).astype("uint8")
+
+    if rhohv is not None:
+        cc = np.asarray(rhohv, dtype="float64")
+        m_cen = fin & np.isfinite(cc) & (cc < _RHOHV_MIN)
+        rate = np.where(m_cen, 0.0, rate)
+        lo = np.where(m_cen, 0.0, lo)
+        hi = np.where(m_cen, 0.0, hi)
+        cls = np.where(m_cen, HYDRO_CENSORED, cls).astype("uint8")
+    return rate, lo, hi, cls
+
+
+def _rates_hydro(radar, low, xs, ys, a, b, dbz_cap, z_blend):
+    """Per-cut (rate, lo, hi, class) grids for the hydro blend.
+
+    Single-pol volumes degrade to pure capped Z-R with a point envelope, so
+    the same call works across eras.
+    """
+    sub = radar.extract_sweeps([s for s, _ in low])
+    dual = "differential_reflectivity" in sub.fields
+    kdp_ok = False
+    if dual and "differential_phase" in sub.fields:
+        try:
+            import pyart
+            kd = pyart.retrieve.kdp_maesaka(sub, psidp_field="differential_phase")[0]
+            kd["data"] = np.clip(np.ma.filled(kd["data"], 0.0), *_KDP_CLIP)
+            sub.add_field("kdp", kd, replace_existing=True)
+            rr = pyart.retrieve.est_rain_rate_kdp(sub, alpha=_RKDP_S[0],
+                                                  beta=_RKDP_S[1], kdp_field="kdp")
+            sub.add_field("rate_kdp", rr, replace_existing=True)
+            kdp_ok = True
+        except Exception as exc:                               # noqa: BLE001
+            warnings.warn(f"R(Kdp) failed ({exc}); hail branch falls to Z-R")
+    out = []
+    for k in range(sub.nsweeps):
+        dbz = _grid_sweep(sub, "reflectivity", k, xs, ys)
+        r_z = z_to_rate(dbz, a=a, b=b, dbz_cap=dbz_cap)
+        if not dual:
+            cls = np.where(np.isfinite(dbz), HYDRO_ZR, HYDRO_DRY).astype("uint8")
+            out.append((r_z, r_z.copy(), r_z.copy(), cls))
+            continue
+        zdr = _grid_sweep(sub, "differential_reflectivity", k, xs, ys)
+        r_zzdr = zzdr_to_rate(dbz, zdr, dbz_cap=dbz_cap)
+        r_kdp = (_grid_sweep(sub, "rate_kdp", k, xs, ys) if kdp_ok
+                 else np.full_like(dbz, np.nan))
+        cc = (_grid_sweep(sub, "cross_correlation_ratio", k, xs, ys)
+              if "cross_correlation_ratio" in sub.fields else None)
+        out.append(hydro_select(dbz, zdr, cc, r_z, r_kdp, r_zzdr,
+                                z_blend=z_blend))
+    return out
+
+
 def _rates_kdp(radar, low, xs, ys, a, b, dbz_cap, z_blend):
     """v2 dual-pol rate grids for the given low cuts (one per cut).
 
@@ -662,6 +763,8 @@ def intensity_stack(aoi, start: datetime, end: datetime,
     xs, ys, crs = _extent_for(rlat, rlon, bounds, res_m)
 
     times, grids, nvol = [], [], 0
+    glo, ghi = [], []
+    cls_counts = None                       # (5, H, W) usage counts for relmode
     for p in paths:
         try:
             rad = read_sweep(p)
@@ -670,6 +773,21 @@ def intensity_stack(aoi, start: datetime, end: datetime,
             base = _scan_epoch(rad)
             low = _low_sweeps(rad, elev_tol, sweep)
             if not low:
+                continue
+            if method == "hydro":
+                quads = _rates_hydro(rad, low, xs, ys, a, b, dbz_cap, z_blend)
+                if cls_counts is None:
+                    cls_counts = np.zeros((5,) + quads[0][0].shape, "uint16")
+                for (si, off), (rate, lo_g, hi_g, cl) in zip(low, quads):
+                    grids.append(rate)
+                    glo.append(lo_g)
+                    ghi.append(hi_g)
+                    times.append(base + off)
+                    wetc = np.nan_to_num(rate, nan=0.0) > 1.0
+                    for c in (HYDRO_ZR, HYDRO_ZZDR, HYDRO_KDP_HAIL):
+                        cls_counts[c] += ((cl == c) & wetc)
+                    cls_counts[HYDRO_CENSORED] += (cl == HYDRO_CENSORED)
+                nvol += 1
                 continue
             if method == "kdp":
                 rates = _rates_kdp(rad, low, xs, ys, a, b, dbz_cap, z_blend)
@@ -689,15 +807,29 @@ def intensity_stack(aoi, start: datetime, end: datetime,
 
     times = np.asarray(times, dtype=float)
     order = np.argsort(times, kind="stable")
-    times, rates = times[order], np.stack(grids)[order]
+    streams = {"": np.stack(grids)[order]}
+    if method == "hydro":
+        streams["lo"] = np.stack(glo)[order]
+        streams["hi"] = np.stack(ghi)[order]
+    times = times[order]
     uniq = np.unique(times)
     if len(uniq) < len(times):                                 # merge equal times
-        rates = np.stack([rates[times == t].mean(axis=0) for t in uniq])
+        streams = {k: np.stack([v[times == t].mean(axis=0) for t in uniq])
+                   for k, v in streams.items()}
         times = uniq
-
     if rate_cap is not None:                                  # uniform max-rate cap
-        rates = np.minimum(rates, rate_cap)
-    fields = _stack_to_intensities(times, rates, durations)
+        streams = {k: np.minimum(v, rate_cap) for k, v in streams.items()}
+    fields = _stack_to_intensities(times, streams[""], durations)
+    if method == "hydro":
+        for tag in ("lo", "hi"):
+            f = _stack_to_intensities(times, streams[tag], durations)
+            fields[f"i15max_{tag}"] = f["i15max"]
+            fields[f"total_{tag}"] = f["total_mm"]
+        if cls_counts is not None:
+            used = cls_counts[1:]
+            relmode = np.where(used.sum(axis=0) > 0,
+                               used.argmax(axis=0) + 1, 0)
+            fields["relmode"] = relmode.astype("float32")
     blk = {}
     if blockage_dem is not None:                               # DEM beam-blockage
         try:
@@ -716,6 +848,8 @@ def intensity_stack(aoi, start: datetime, end: datetime,
     cad = float(np.median(np.diff(times)) / 60.0) if len(times) > 1 else float("nan")
     src = {"kdp": "NEXRAD L2 i15 stack: R(Kdp) blended with capped Z-R",
            "zzdr": "NEXRAD L2 i15 stack: R(Z,ZDR) blended with capped Z-R",
+           "hydro": "NEXRAD L2 i15 stack: per-gate hydro blend "
+                    "(Z-R / R(Z,ZDR) / R(Kdp)-in-hail, CSU-HIDRO style)",
            }.get(method, "NEXRAD L2 i15 stack: capped convective Z-R")
     meta = {"source": src, "radar": rid, "method": method,
             "zr_a": a, "zr_b": b, "dbz_cap": dbz_cap, "rate_cap": rate_cap,
@@ -727,6 +861,16 @@ def intensity_stack(aoi, start: datetime, end: datetime,
     elif method == "zzdr":
         meta.update(zzdr_c=_RZZDR[0], zzdr_zexp=_RZZDR[1], zzdr_zdrexp=_RZZDR[2],
                     z_blend_dbz=z_blend)
+    elif method == "hydro":
+        meta.update(z_blend_dbz=z_blend, hail_dbz=_HAIL_DBZ, hail_zdr=_HAIL_ZDR,
+                    rhohv_min=_RHOHV_MIN, kdp_guard=_KDP_GUARD)
+        if cls_counts is not None:
+            tot = int(cls_counts[1:4].sum())
+            if tot:
+                meta["relation_usage_pct"] = {
+                    "zr_light": round(100 * int(cls_counts[HYDRO_ZR].sum()) / tot, 1),
+                    "zzdr_rain": round(100 * int(cls_counts[HYDRO_ZZDR].sum()) / tot, 1),
+                    "kdp_hail": round(100 * int(cls_counts[HYDRO_KDP_HAIL].sum()) / tot, 1)}
     meta.update(blk)
     return _multi_to_result(fields, xs, ys, crs, bounds, meta)
 
@@ -836,7 +980,7 @@ def virtual_gauge_timeseries(points, start: datetime, end: datetime,
         sub = rad.extract_sweeps([s for s, _ in low])
         base = _scan_epoch(rad)
         kdp_ok = False
-        if method == "kdp" and "differential_phase" in sub.fields:
+        if method in ("kdp", "hydro") and "differential_phase" in sub.fields:
             try:
                 import pyart
                 kd = pyart.retrieve.kdp_maesaka(sub, psidp_field="differential_phase")[0]
@@ -860,6 +1004,22 @@ def virtual_gauge_timeseries(points, start: datetime, end: datetime,
                     sub, g, field="differential_reflectivity", sweep=k)
                 rzz = zzdr_to_rate(dbz, zv, dbz_cap=dbz_cap)
                 rate = np.where(np.isfinite(rzz) & (dbz >= z_blend), rzz, rz)
+            elif (method == "hydro"
+                  and "differential_reflectivity" in sub.fields):
+                zv = sample_radar_at_points(
+                    sub, g, field="differential_reflectivity", sweep=k)
+                rzz = zzdr_to_rate(dbz, zv, dbz_cap=dbz_cap)
+                if kdp_ok:
+                    kv = sample_radar_at_points(sub, g, field="kdp", sweep=k)
+                    rk = _RKDP_S[0] * np.where(np.isfinite(kv) & (kv > 0),
+                                               kv, 0.0) ** _RKDP_S[1]
+                else:
+                    rk = np.full_like(np.atleast_1d(dbz), np.nan, dtype=float)
+                cc = (sample_radar_at_points(
+                          sub, g, field="cross_correlation_ratio", sweep=k)
+                      if "cross_correlation_ratio" in sub.fields else None)
+                rate, _, _, _ = hydro_select(dbz, zv, cc, rz, rk, rzz,
+                                             z_blend=z_blend)
             else:
                 rate = rz
             if rate_cap is not None:

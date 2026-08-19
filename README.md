@@ -391,6 +391,16 @@ Three independent rate retrievals from the same lowest-tilt data
 | `za` | capped convective Z=300R^1.4 | big drops, hail (over-reads) |
 | `kdp` | R(Kdp), ice-blind | δ (backscatter phase) bumps, melting hail |
 | `zzdr` | R(Z,ZDR) = 0.0142 Z^0.77 Zdr^-1.67 (WSR-88D operational, Giangrande & Ryzhkov 2008) | ZDR miscalibration |
+| `hydro` | per-gate blend of all three (CSU-HIDRO / dual-pol-QPE-style decision tree) | inherits members' modes, but routes around each |
+
+`hydro` selects per gate per scan -- BEFORE the running i15 max, which is
+irreversible: ρHV < 0.85 censored; light rain (Z < 35) capped Z-R; hail
+signature (Z ≥ 45, ZDR ≤ 0.8) → R(Kdp), capped at 1.5× Z-R (backscatter-phase
+guard); everything else → R(Z,ZDR). It also writes a **lo/hi envelope**
+(`<key>_i15max_lo/hi.tif`, `total_lo/hi`) bounding each cell by the relations
+defensibly applicable there, and `<key>_relmode.tif` (modal relation per cell:
+1 Z-R, 2 R(Z,ZDR), 3 R(Kdp)-hail, 4 censored). A reconnaissance field that
+carries its own spread cannot quietly overstate confidence.
 
 Where all three agree, trust the number; where one departs, its failure mode
 names the suspect. All beam-level estimates still miss what happens *below*

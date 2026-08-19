@@ -2091,7 +2091,7 @@ def _add_gauges_pipeline_opts(p):
     p.add_argument("--no-multisensor", action="store_true",
                    help="skip the hourly gauge-corrected MultiSensor QPE (MRMS) overlay")
     p.add_argument("--radar", help="NEXRAD radar id (nearest to the AOI if unset)")
-    p.add_argument("--method", choices=["za", "kdp", "zzdr"], default="kdp",
+    p.add_argument("--method", choices=["za", "kdp", "zzdr", "hydro"], default="kdp",
                    help="NEXRAD rate recipe for the VG series (default kdp)")
     p.add_argument("--cache-dir", help="NEXRAD volume cache dir "
                                        "(default <out-dir>/nexrad_cache)")
@@ -2431,9 +2431,9 @@ def main(argv=None):
                     help="hail cap (dBZ) before Z-R conversion (default 53)")
     pn.add_argument("--no-hail-cap", action="store_true",
                     help="disable the dBZ hail cap (raw convective Z-R)")
-    pn.add_argument("--method", choices=["za", "kdp", "zzdr"], default="za",
+    pn.add_argument("--method", choices=["za", "kdp", "zzdr", "hydro"], default="za",
                     help="--intensity rate: za = capped convective Z-R (v1, all "
-                         "eras); kdp = dual-pol R(Kdp) blended with Z-R (v2, 2012+); zzdr = R(Z,ZDR), big-drop/DSD-robust (v3, 2012+)")
+                         "eras); kdp = dual-pol R(Kdp) blended with Z-R (v2, 2012+); zzdr = R(Z,ZDR), big-drop/DSD-robust (v3, 2012+); hydro = per-gate blend of all three with hail routing + lo/hi envelope (v4)")
     pn.add_argument("--z-blend", type=float, default=35.0,
                     help="--method kdp: use R(Kdp) at/above this dBZ, capped Z-R "
                          "below (default 35)")
@@ -2602,7 +2602,7 @@ def main(argv=None):
                     help="also include the single-radar NEXRAD L2 series "
                          "alongside MRMS on the atlas/CSVs (>=2020 events)")
     pv.add_argument("--radar", help="NEXRAD radar id for --source nexrad (nearest if unset)")
-    pv.add_argument("--method", choices=["za", "kdp", "zzdr"], default="kdp",
+    pv.add_argument("--method", choices=["za", "kdp", "zzdr", "hydro"], default="kdp",
                     help="--source nexrad rate recipe (default kdp)")
     pv.add_argument("--cache-dir", help="NEXRAD volume cache dir (--source nexrad)")
     pv.add_argument("--dpi", type=int, default=200)
