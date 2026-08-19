@@ -77,6 +77,10 @@ from .plot import (Labeller, add_gauges, add_reference, anomaly_map,
                    smoothing_skill_plot, virtual_gauge_atlas,
                    virtual_gauge_detail)
 from .refdata import places, reference_layers, roads, streams
+from .relief import (ALTITUDE_DEG as RELIEF_ALTITUDE_DEG,
+                     AZIMUTH_DEG as RELIEF_AZIMUTH_DEG,
+                     SHADE_RES_M as RELIEF_SHADE_RES_M,
+                     light_direction, shade, shaded_relief)
 from .smoothing import (METHODS as SMOOTH_METHODS, best_radius, cell_size_km,
                         gauge_skill_sweep, smooth_array, smooth_dataarray,
                         smooth_event_fields, smooth_tif)
@@ -117,6 +121,8 @@ __all__ = [
     "caltopo_classify", "caltopo_class_labels", "caltopo_summary",
     "CALTOPO_CLASS_COLORS",
     "streams", "roads", "places", "reference_layers",
+    "shaded_relief", "shade", "light_direction",
+    "RELIEF_SHADE_RES_M", "RELIEF_AZIMUTH_DEG", "RELIEF_ALTITUDE_DEG",
     "burn_severity", "find_scenes", "burn_catalog", "fetch_scene",
     "burn_classify", "SEVERITY_SCHEMES", "register_brisk_cmap",
     "severity_mask", "to_accumulation", "from_accumulation",
