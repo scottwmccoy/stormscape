@@ -114,3 +114,156 @@ def test_fill_hillshade_nan_passes_an_all_nan_array_through():
 def test_default_field_alpha_is_the_documented_project_value():
     """One project-wide drape opacity; every map resolves None to it."""
     assert plot.DEFAULT_FIELD_ALPHA == pytest.approx(0.32)
+
+
+# --------------------------------------------------------------------------- #
+# label placement
+# --------------------------------------------------------------------------- #
+@pytest.fixture()
+def label_ax():
+    """A 6x6 inch axis spanning 0-100 in both directions, 100 dpi -> 600 px."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 100)
+    fig.canvas.draw()
+    yield ax
+    plt.close(fig)
+
+
+def test_shorten_cuts_at_a_word_boundary():
+    assert plot.shorten("North Fork Little Humboldt River", 26) == \
+        "North Fork Little…"
+    assert plot.shorten("Sheep Creek", 26) == "Sheep Creek"
+
+
+def test_shorten_falls_back_to_a_hard_cut_for_one_long_word():
+    """No boundary to cut at — better a truncated word than an overflowing one."""
+    assert plot.shorten("Supercalifragilistic", 10) == "Supercali…"
+
+
+def test_interior_point_prefers_a_vertex_away_from_the_frame():
+    from shapely.geometry import LineString
+
+    # runs from the very edge of the window into its middle
+    line = LineString([(0.5, 50), (20, 50), (50, 50)])
+    x, y = plot.interior_point(line, (0, 0, 100, 100))
+    assert (x, y) == (50, 50)
+
+
+def test_interior_point_ignores_vertices_outside_the_window():
+    from shapely.geometry import LineString
+
+    line = LineString([(-40, 50), (60, 50)])
+    assert plot.interior_point(line, (0, 0, 100, 100)) == (60, 50)
+
+
+def test_interior_point_of_a_line_wholly_outside_is_none():
+    from shapely.geometry import LineString
+
+    assert plot.interior_point(LineString([(-9, -9), (-5, -5)]),
+                               (0, 0, 100, 100)) is None
+
+
+def test_labels_do_not_land_on_each_other(label_ax):
+    lab = plot.Labeller(label_ax)
+    assert lab.label(50, 50, "Alpha", fontsize=8)
+    assert lab.label(50, 50, "Beta", fontsize=8)     # same point, must move
+
+    (a, b) = lab.taken
+    overlap = not (a[2] < b[0] or a[0] > b[2] or a[3] < b[1] or a[1] > b[3])
+    assert not overlap
+
+
+def test_a_label_never_leaves_the_panel(label_ax):
+    """The frame test replaces clipping: a label that would run off is moved,
+    not cut in half at the edge."""
+    lab = plot.Labeller(label_ax)
+    assert lab.label(99.5, 99.5, "Corner", fontsize=8)
+
+    ab = label_ax.get_window_extent()
+    (x0, y0, x1, y1) = lab.taken[0]
+    assert x0 >= ab.x0 and x1 <= ab.x1
+    assert y0 >= ab.y0 and y1 <= ab.y1
+
+
+def test_label_reports_failure_rather_than_stacking(label_ax):
+    """A label on top of another is worse than a missing one, so the caller is
+    told instead."""
+    lab = plot.Labeller(label_ax)
+    # wall off every candidate ring around the point
+    for dx in range(-90, 91, 6):
+        for dy in range(-90, 91, 6):
+            lab.taken.append((300 + dx, 300 + dy, 306 + dx, 306 + dy))
+    assert lab.label(50, 50, "Nowhere", fontsize=8) is False
+
+
+def test_a_displaced_label_gets_a_leader_line(label_ax):
+    """Far enough to be ambiguous means far enough to need connecting."""
+    lab = plot.Labeller(label_ax)
+    lab.label(50, 50, "First", fontsize=8)
+    before = len(label_ax.lines)
+    lab.label(50, 50, "Second", fontsize=8, force_leader=True)
+
+    assert len(label_ax.lines) == before + 1
+
+
+def test_an_adjacent_label_draws_no_leader(label_ax):
+    """A 2 px stub beside its own dot is noise, not information."""
+    lab = plot.Labeller(label_ax)
+    lab.label(50, 50, "Close", fontsize=8)
+    assert not label_ax.lines
+
+
+def test_forced_leaders_clear_the_label_box(label_ax):
+    """The reason annotate's arrows looked absent: an offset shorter than the
+    text's own half-width leaves no visible line."""
+    lab = plot.Labeller(label_ax)
+    lab.label(50, 50, "12", fontsize=8.5, force_leader=True)
+    (x0, y0, x1, y1) = lab.taken[0]
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    px, py = label_ax.transData.transform((50, 50))
+
+    assert np.hypot(cx - px, cy - py) >= plot.LEADER_FROM
+    assert np.hypot(cx - px, cy - py) > (x1 - x0) / 2
+
+
+def test_crowded_sees_a_neighbouring_marker(label_ax):
+    lab = plot.Labeller(label_ax)
+    lab.block_many([50, 51], [50, 50])       # two dots ~6 px apart
+    assert lab.crowded(50, 50)
+    lab2 = plot.Labeller(label_ax)
+    lab2.block_many([10, 90], [10, 90])      # far apart
+    assert not lab2.crowded(10, 10)
+
+
+def test_labels_avoid_registered_markers(label_ax):
+    lab = plot.Labeller(label_ax)
+    lab.block(50, 50, radius_px=20)
+    assert lab.label(50, 50, "X", fontsize=8)
+    (x0, y0, x1, y1) = lab.taken[-1]
+    px, py = label_ax.transData.transform((50, 50))
+    blocked = (px - 20, py - 20, px + 20, py + 20)
+    assert (x1 < blocked[0] or x0 > blocked[2]
+            or y1 < blocked[1] or y0 > blocked[3])
+
+
+def test_interior_point_accepts_a_polygon():
+    """Lakes arrive alongside the lines; a polygon has no coordinate sequence
+    of its own, so the exterior ring is what gets sampled."""
+    from shapely.geometry import Polygon
+
+    lake = Polygon([(1, 1), (60, 1), (60, 40), (1, 40)])
+    pt = plot.interior_point(lake, (0, 0, 100, 100))
+    assert pt is not None and 0 < pt[0] < 100 and 0 < pt[1] < 100
+
+
+def test_interior_point_accepts_a_multipolygon():
+    from shapely.geometry import MultiPolygon, Polygon
+
+    mp = MultiPolygon([Polygon([(1, 1), (5, 1), (5, 5)]),
+                       Polygon([(40, 40), (60, 40), (60, 60), (40, 60)])])
+    assert plot.interior_point(mp, (0, 0, 100, 100)) is not None

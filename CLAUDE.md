@@ -93,6 +93,7 @@ in `README.md`.
 
 - `stormscape/aoi.py` — AOI parsing (bbox / vector / geometry) + overlay loading
 - `stormscape/dem.py` — 3DEP DEM download, 1 m availability check, hillshade
+- `stormscape/relief.py` — shaded relief on an arbitrary *display* grid from a local 3DEP tile store (`dem.hillshade` shades a DEM you already hold; this one serves map figures). Downstream of both firescape and tracescape, which is why it lives here
 - `stormscape/mrms.py` — MRMS fetch/stack → i15/i30/i60 fields + MultiSensor total
 - `stormscape/gauges.py` — Synoptic/MesoWest gauges → total + peak intensities
 - `stormscape/compare.py` — sample radar at gauges → residuals + skill stats

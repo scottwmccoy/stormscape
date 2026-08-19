@@ -238,3 +238,20 @@ def test_figure_to_geopdf_georeferences_the_map_axes(tmp_path):
     assert max(xs) == pytest.approx(x1, abs=1.0)
     assert min(ys) == pytest.approx(y0, abs=1.0)
     assert max(ys) == pytest.approx(y1, abs=1.0)
+
+
+def test_write_rgba_tags_the_alpha_band(tmp_path):
+    """Untagged, CalTopo paints the layer's whole rectangle over the basemap."""
+    import rasterio
+    from rasterio.enums import ColorInterp
+    from rasterio.transform import from_origin
+    rgba = np.zeros((4, 5, 4), dtype=np.uint8)
+    rgba[..., 3] = 255
+    rgba[0, 0, 3] = 0
+    out = export.write_rgba(str(tmp_path / "a.tif"), rgba,
+                            from_origin(-13e6, 4.7e6, 60, 60), "EPSG:3857")
+    with rasterio.open(out) as ds:
+        assert ds.count == 4
+        assert ds.colorinterp[3] == ColorInterp.alpha
+        assert ds.crs.to_epsg() == 3857
+        assert ds.read(4)[0, 0] == 0

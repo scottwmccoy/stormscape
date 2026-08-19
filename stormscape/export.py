@@ -146,9 +146,14 @@ def _colormap_rgba(arr, cmap, vmin, vmax, norm=None, mask_below=None):
     return rgba
 
 
-def _write_rgba(out_tif: str, rgba, transform, crs) -> str:
+def write_rgba(out_tif: str, rgba, transform, crs) -> str:
     """Write an ``(H, W, 4)`` uint8 RGBA array as a 4-band GeoTIFF with the alpha
-    band tagged, so viewers honour the transparency."""
+    band tagged, so viewers honour the transparency.
+
+    Tagging the fourth band ``ColorInterp.alpha`` is the whole point: without it
+    CalTopo paints the layer's full rectangle over the basemap instead of
+    letting the untouched cells through.
+    """
     import rasterio
     from rasterio.enums import ColorInterp
     h, w = rgba.shape[:2]
@@ -203,7 +208,7 @@ def export_geotiffs(in_dir: str, key: str, out_dir: str,
             rgba = _colormap_rgba(arr, sty, vmin, vmx, norm=norm,
                                   mask_below=mask_below)
             rgb_path = out_path(out_dir, f"{out_key}_{field}_{tag}_rgb.tif")
-            _write_rgba(rgb_path, rgba, da.rio.transform(), da.rio.crs)
+            write_rgba(rgb_path, rgba, da.rio.transform(), da.rio.crs)
             written.append(rgb_path)
         if raw:
             written.append(raw_path)

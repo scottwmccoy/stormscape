@@ -7,6 +7,7 @@ generic, optional overlay so the same figure works for any AOI.
 
 from __future__ import annotations
 
+import math as _math
 import os
 import warnings
 
@@ -116,20 +117,199 @@ def _label_line(ax, geom, text, color, fontsize, italic=False):
     t.set_path_effects([pe.withStroke(linewidth=2.0, foreground="white")])
 
 
-def _label_point(ax, x, y, text, fontsize):
+def _label_point(ax, x, y, text, fontsize, labeller=None):
     import matplotlib.patheffects as pe
+    if labeller is not None:
+        labeller.label(x, y, text, fontsize=fontsize)
+        return
     t = ax.text(x, y, "  " + text, fontsize=fontsize, color="black",
                 va="center", ha="left", zorder=9, clip_on=True)
     t.set_path_effects([pe.withStroke(linewidth=1.6, foreground="white")])
 
 
-def _longest_per_name(gdf):
+def longest_per_name(gdf):
     """One row per unique name (the longest geometry), for label de-cluttering."""
     g = gdf[gdf.name.notna() & (gdf.name.astype(str).str.len() > 0)].copy()
     if not len(g):
         return g
     g["_len"] = g.geometry.length
     return g.sort_values("_len", ascending=False).drop_duplicates("name")
+
+
+_longest_per_name = longest_per_name       # pre-0.9 internal name
+
+
+def shorten(name, limit=26):
+    """Trim a long feature name at a word boundary, not mid-word.
+
+    ``"North Fork Little Humboldt River"`` becomes ``"North Fork Little…"``
+    rather than ``"North Fork Little Humbol"``.
+    """
+    name = str(name)
+    if len(name) <= limit:
+        return name
+    cut = name[:limit - 1].rsplit(" ", 1)[0]
+    return (cut if cut else name[:limit - 1]) + "…"
+
+
+def interior_point(geom, bounds):
+    """Vertex of ``geom`` furthest from any edge of ``bounds`` (w, s, e, n).
+
+    A label anchored at a line's representative point lands wherever the reach
+    happens to be centred, which on a clipped window is often hard against the
+    frame. Anchoring at the most interior vertex is what keeps a long river
+    name on the map. Returns ``None`` if no vertex falls inside ``bounds``.
+    """
+    w, s, e, n = bounds
+    coords = []
+    for part in getattr(geom, "geoms", [geom]):
+        # A polygon has no coordinate sequence of its own -- asking for one
+        # raises -- so take its exterior ring. Lakes and reservoirs arrive
+        # here as polygons alongside the lines.
+        ring = getattr(part, "exterior", None)
+        seq = ring.coords if ring is not None else getattr(part, "coords", ())
+        coords.extend(list(seq))
+    if not coords:
+        return None
+    step = max(1, len(coords) // 60)
+    best, score = None, -1.0
+    for x, y in coords[::step]:
+        if not (w < x < e and s < y < n):
+            continue
+        d = min((x - w) / (e - w), (e - x) / (e - w),
+                (y - s) / (n - s), (n - y) / (n - s))
+        if d > score:
+            best, score = (x, y), d
+    return best
+
+
+#: Offsets a label may take, in display pixels from its anchor: touching
+#: first, then progressively further out.
+_RINGS = [(7.0, 5.0)] + [
+    (r * _math.cos(_math.radians(a)), r * _math.sin(_math.radians(a)))
+    for r in (20, 32, 44, 58, 74)
+    for a in (30, 150, 210, 330, 90, 270, 0, 180, 60, 120, 240, 300)]
+
+#: Below this offset a leader line is not worth drawing: a two-digit label at
+#: 8.5 pt is ~22 px wide, so a 20 px offset leaves about two pixels of visible
+#: line. (This is also why matplotlib's ``annotate`` arrows look absent at
+#: small offsets — they are drawn from the text's bounding box, which at that
+#: distance already reaches the anchor.)
+LEADER_FROM = 28.0
+
+
+class Labeller:
+    """Collision-aware label placement for one map axis.
+
+    Map labels fail in three ways that fixed offsets cannot fix: they land on
+    each other in clusters, they run off the frame, and once displaced far
+    enough to be legible they stop being attached to anything. This places
+    each label at the first offset that clears every label already placed,
+    every registered marker, and the panel frame — and draws a leader line
+    when the label ends up far enough away to need one.
+
+    Call it only once the axes limits and figure layout are final (after
+    ``fig.canvas.draw()`` if the figure uses ``tight_layout``); placement is
+    computed in display coordinates, which move if the layout does.
+
+    Text extents are estimated from the font size rather than measured, which
+    is close enough for the short names on a map and avoids a renderer round
+    trip per candidate position.
+    """
+
+    def __init__(self, ax, *, pad=2.0, margin=3.0):
+        self.ax = ax
+        self.pad = pad
+        self.margin = margin
+        self.taken = []
+
+    def block(self, x, y, radius_px=4.0):
+        """Register a drawn marker at data coordinates so labels avoid it."""
+        px, py = self.ax.transData.transform((x, y))
+        self.taken.append((px - radius_px, py - radius_px,
+                           px + radius_px, py + radius_px))
+
+    def block_many(self, xs, ys, radius_px=4.0):
+        for x, y in zip(xs, ys):
+            self.block(x, y, radius_px)
+
+    def crowded(self, x, y, radius_px=26.0):
+        """Is another registered marker within ``radius_px`` of this point?
+
+        A label that fits snugly beside its dot is still ambiguous when a
+        neighbouring dot is just as close — in that case a displaced label on
+        a leader is more legible than a tight one.
+        """
+        px, py = self.ax.transData.transform((x, y))
+        r2 = radius_px ** 2
+        return sum(((q[0] + q[2]) / 2 - px) ** 2 + ((q[1] + q[3]) / 2 - py) ** 2
+                   < r2 for q in self.taken) > 1
+
+    def _fits(self, rect):
+        ab = self.ax.get_window_extent()
+        if (rect[0] < ab.x0 + self.margin or rect[2] > ab.x1 - self.margin
+                or rect[1] < ab.y0 + self.margin or rect[3] > ab.y1 - self.margin):
+            return False
+        p = self.pad
+        return not any(not (rect[2] < q[0] - p or rect[0] > q[2] + p
+                            or rect[3] < q[1] - p or rect[1] > q[3] + p)
+                       for q in self.taken)
+
+    def _leader(self, px, py, cx, cy, w, h, color):
+        from matplotlib.lines import Line2D
+        import matplotlib.patheffects as pe
+
+        dx, dy = px - cx, py - cy
+        d = _math.hypot(dx, dy)
+        if not d:
+            return
+        ux, uy = dx / d, dy / d
+        # stop on the label box boundary, not at its centre, or the line is
+        # hidden under the text it belongs to
+        t = min((w / 2 + 1.0) / abs(ux) if ux else 1e9,
+                (h / 2 + 1.0) / abs(uy) if uy else 1e9)
+        inv = self.ax.transData.inverted()
+        x0, y0 = inv.transform((cx + ux * t, cy + uy * t))
+        x1, y1 = inv.transform((px - ux * 2.5, py - uy * 2.5))
+        self.ax.add_line(Line2D([x0, x1], [y0, y1], lw=0.55, color=color,
+                                zorder=9.4, solid_capstyle="round",
+                                path_effects=[pe.withStroke(linewidth=1.7,
+                                              foreground="white")]))
+
+    def label(self, x, y, text, *, fontsize=5.5, color="black",
+              style="normal", weight="normal", zorder=9.5, halo=2.0,
+              force_leader=False):
+        """Place ``text`` near data point ``(x, y)``. False if nowhere fits.
+
+        Returning False rather than drawing anyway is deliberate: a label
+        stacked on another one is worse than a missing label, and the caller
+        can count the drops.
+        """
+        import matplotlib.patheffects as pe
+
+        px, py = self.ax.transData.transform((x, y))
+        dpi = self.ax.figure.dpi
+        w = 0.62 * fontsize * len(str(text)) * dpi / 72.0
+        h = 1.10 * fontsize * dpi / 72.0
+        rings = ([c for c in _RINGS if _math.hypot(*c) >= LEADER_FROM]
+                 if force_leader else _RINGS)
+        for dx, dy in rings:
+            rect = (px + dx - w / 2, py + dy - h / 2,
+                    px + dx + w / 2, py + dy + h / 2)
+            if not self._fits(rect):
+                continue
+            if force_leader or _math.hypot(dx, dy) > LEADER_FROM:
+                self._leader(px, py, px + dx, py + dy, w, h, color)
+            self.ax.annotate(
+                text, (x, y), xytext=(dx * 72.0 / dpi, dy * 72.0 / dpi),
+                textcoords="offset points", ha="center", va="center",
+                fontsize=fontsize, color=color, style=style,
+                fontweight=weight, zorder=zorder,
+                path_effects=[pe.withStroke(linewidth=halo,
+                                            foreground="white")])
+            self.taken.append(rect)
+            return True
+        return False
 
 
 def add_reference(ax, work_crs, streams=None, roads=None, places=None,
@@ -193,10 +373,15 @@ def add_reference(ax, work_crs, streams=None, roads=None, places=None,
         handles.append(Line2D([], [], marker="o", color="black", mec="white",
                               lw=0, markersize=5, label="place (GNIS)"))
         if label:
+            # Through a Labeller: place names cluster (a valley's towns sit
+            # along one road), and stacked names are the failure a reference
+            # overlay is least able to afford.
+            lab = Labeller(ax)
+            lab.block_many(reps.x, reps.y, radius_px=5.0)
             for i, row in p.iterrows():
                 if row.get("name"):
                     _label_point(ax, reps.iloc[i].x, reps.iloc[i].y,
-                                 row["name"], 5.5)
+                                 shorten(row["name"]), 5.5, labeller=lab)
     return handles
 
 

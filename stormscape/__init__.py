@@ -36,6 +36,10 @@ from .atlas14 import (anomaly, climatology_field, fetch_grid, grid_url,
 from .burn import (SEVERITY_SCHEMES, burn_severity, catalog as burn_catalog,
                    classify as burn_classify, fetch_scene, find_scenes,
                    register_brisk_cmap, severity_mask)
+from .caltopo import (CLASS_COLORS as CALTOPO_CLASS_COLORS, Layer as CaltopoLayer,
+                      build as caltopo_build, class_labels as caltopo_class_labels,
+                      classify as caltopo_classify, folder as caltopo_folder,
+                      summary as caltopo_summary, write as caltopo_write)
 from .compare import (comparison_stats, compare_storm, gauge_recurrence_table,
                       radar_vs_gauge, sample_raster_at_points)
 from .merge import (conditional_merge, local_bias, loo_cross_validate,
@@ -43,7 +47,8 @@ from .merge import (conditional_merge, local_bias, loo_cross_validate,
 from .dem import (coverage_fraction, dem_sources, fetch_dem_and_hillshade,
                   get_dem, hillshade)
 from .export import (DEFAULT_EXPORT_FIELDS, export_geotiffs, export_streams,
-                     figure_to_geopdf, geopdf_supported, reproject_geotiff)
+                     figure_to_geopdf, geopdf_supported, reproject_geotiff,
+                     write_rgba)
 from .gauges import (fetch_gauge_event, gauge_fields, gauge_intensities,
                      gauge_timeseries, get_rainfall as gauge_rainfall,
                      get_stations as gauge_stations, load_event_series,
@@ -65,12 +70,17 @@ from .nexrad import (available_scans, beam_blockage, download_scans,
                      nearest_scan, radar_location, read_sweep,
                      reflectivity_composite, reflectivity_field,
                      sample_radar_at_points, z_to_rate)
-from .plot import (add_gauges, add_reference, anomaly_map, bbox_picker,
-                   climatology_comparison, diagnostic_panels, drape_i15,
-                   plot_virtual_gauge, smoothing_comparison,
+from .plot import (Labeller, add_gauges, add_reference, anomaly_map,
+                   bbox_picker, climatology_comparison, diagnostic_panels,
+                   drape_i15, interior_point, longest_per_name,
+                   plot_virtual_gauge, shorten, smoothing_comparison,
                    smoothing_skill_plot, virtual_gauge_atlas,
                    virtual_gauge_detail)
 from .refdata import places, reference_layers, roads, streams
+from .relief import (ALTITUDE_DEG as RELIEF_ALTITUDE_DEG,
+                     AZIMUTH_DEG as RELIEF_AZIMUTH_DEG,
+                     SHADE_RES_M as RELIEF_SHADE_RES_M,
+                     light_direction, shade, shaded_relief)
 from .smoothing import (METHODS as SMOOTH_METHODS, best_radius, cell_size_km,
                         gauge_skill_sweep, smooth_array, smooth_dataarray,
                         smooth_event_fields, smooth_tif)
@@ -94,6 +104,7 @@ __all__ = [
     "nearest_scan", "read_sweep", "lowest_tilt_grid", "reflectivity_field",
     "reflectivity_composite", "sample_radar_at_points", "z_to_rate",
     "intensity_stack", "beam_blockage",
+    "Labeller", "shorten", "interior_point", "longest_per_name",
     "drape_i15", "add_reference", "add_gauges", "diagnostic_panels",
     "virtual_gauge_timeseries", "plot_virtual_gauge", "virtual_gauge_atlas",
     "virtual_gauge_detail", "bbox_picker",
@@ -105,7 +116,13 @@ __all__ = [
     "smoothing_comparison", "smoothing_skill_plot",
     "reproject_geotiff", "export_geotiffs", "export_streams",
     "figure_to_geopdf", "geopdf_supported", "DEFAULT_EXPORT_FIELDS",
+    "write_rgba",
+    "CaltopoLayer", "caltopo_build", "caltopo_write", "caltopo_folder",
+    "caltopo_classify", "caltopo_class_labels", "caltopo_summary",
+    "CALTOPO_CLASS_COLORS",
     "streams", "roads", "places", "reference_layers",
+    "shaded_relief", "shade", "light_direction",
+    "RELIEF_SHADE_RES_M", "RELIEF_AZIMUTH_DEG", "RELIEF_ALTITUDE_DEG",
     "burn_severity", "find_scenes", "burn_catalog", "fetch_scene",
     "burn_classify", "SEVERITY_SCHEMES", "register_brisk_cmap",
     "severity_mask", "to_accumulation", "from_accumulation",
