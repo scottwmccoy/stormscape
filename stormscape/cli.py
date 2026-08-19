@@ -926,6 +926,24 @@ def _nexrad_when(args):
     return start + (end - start) / 2
 
 
+def _cmd_virga(args):
+    from .nexrad import radar_location
+    from .virga import virga_mask
+    os.makedirs(args.out_dir, exist_ok=True)
+    rl = None
+    if args.radar:
+        lat, lon, _ = radar_location(args.radar.upper())
+        rl = (lon, lat)
+    res = virga_mask(args.mosaic, args.support, args.out_dir,
+                     args.key or "virga", min_mmph=args.min_mmph,
+                     ratio=args.ratio, radar_lonlat=rl,
+                     exclude_km=args.exclude_km)
+    print(json.dumps({k: v for k, v in res.items()
+                      if not k.endswith("_tif")}, indent=2))
+    print(f"wrote {res['virgarisk_tif']}")
+    print(f"wrote {res['supportratio_tif']}")
+
+
 def _cmd_nexrad(args):
     from .mrms import save_fields
     from .nexrad import (intensity_stack, nearest_radar, reflectivity_composite,
@@ -2412,6 +2430,32 @@ def main(argv=None):
     _add_mine_overlay_opts(pn)
     _add_stream_overlay_opts(pn)
     pn.set_defaults(func=_cmd_nexrad)
+
+
+    pvg = sub.add_parser(
+        "virga",
+        help="flag mosaic intensity with no low-level support (virga risk)")
+    pvg.add_argument("--mosaic", required=True,
+                     help="mosaic intensity tif (e.g. MRMS <key>_i15max.tif)")
+    pvg.add_argument("--support", required=True,
+                     help="single-radar lowest-tilt intensity tif over the "
+                          "same event (e.g. nexrad --intensity i15max output)")
+    pvg.add_argument("--min-mmph", type=float, default=10.0,
+                     help="ignore cells where both fields are below this "
+                          "(default 10 mm/h)")
+    pvg.add_argument("--ratio", type=float, default=3.0,
+                     help="disagreement factor that flags a cell (default 3)")
+    pvg.add_argument("--radar",
+                     help="four-letter radar id; masks cells within "
+                          "--exclude-km of the site, where the gridded "
+                          "lowest tilt is itself unreliable")
+    pvg.add_argument("--exclude-km", type=float, default=2.0,
+                     help="near-radar exclusion radius, km (default 2)")
+    pvg.add_argument("--out-dir", default=".", help="output directory")
+    pvg.add_argument("--key", help="filename stem (default 'virga')")
+    pvg.add_argument("--flat", action="store_true",
+                     help="write products straight into --out-dir")
+    pvg.set_defaults(func=_cmd_virga)
 
     pp = sub.add_parser("panels",
                         help="multi-panel diagnostic map of stacked radar fields")

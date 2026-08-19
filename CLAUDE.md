@@ -941,6 +941,22 @@ in `README.md`.
   want the most intense hours only. Tests cover the truncating case, the dropped
   hour being the *weakest* not the last, the shortened span, and — importantly —
   that the sub-cap and all-dry-fallback paths stay silent.
+- **Virga-risk mask (`virga.py`, CLI `virga`, 2026-08-15).** Born from the
+  Stallion Fire radar-bias investigation: MRMS mapped 34 mm/h i15 over Paiute
+  Creek while the in-perimeter radar's own lowest tilt read ~1 mm under BOTH
+  Z-R and R(Kdp) — elevated echo that evaporated before the ground. Classifies
+  a mosaic intensity field against a single-radar lowest-tilt stack:
+  0 supported / 1 virga-risk (mosaic ≥ ratio× low tilt) / 2 under-read (low
+  tilt ≥ ratio× mosaic — shallow cells the hybrid scan discounted; this class
+  matched field observations in the SR445 valley) / 255 nodata. Drizzle
+  agreement (both < min_mmph) is NODATA, not supported — agreement about
+  nothing is not evidence. Cells within exclude_km (default 2) of the radar are
+  NODATA: the gridded base tilt has too few usable gates there (measured, not
+  assumed — a 45× "discrepancy" at the radar cell turned out to be OUR sampling,
+  not MRMS). The support raster defines the output grid. Validated on the real
+  13 Aug 2026 event: Paiute → virga_risk, SR445 valley → under-read, Big Mouth
+  core → supported. Tests: `tests/test_virga.py` (truth table, drizzle rule,
+  inclusive ratio, regrid, exclusion ring, CLI smoke).
 - **Near-real-time burn severity (`burn.py`, CLI `burn`, 2026-08-14) — CIMSS
   BRISK.** Puts a scar under the rain *while the fire is still burning*, which the
   authoritative products cannot: BAER soil burn severity lands days-to-weeks after

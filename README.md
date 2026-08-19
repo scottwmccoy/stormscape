@@ -381,6 +381,30 @@ radar sources. In Python: `mrms.virtual_gauge_timeseries` /
 which takes `{source_label: {name: df}}` plus a `real_series` overlay, and
 `plot.virtual_gauge_detail(sources, name, real_series=)` for one gauge's 4-row figure.
 
+### Virga-risk mask — does the mosaic intensity have low-level support?
+
+In dry-boundary-layer convection (Great Basin monsoon), a mosaic QPE can grid
+precipitation that only ever existed aloft — it evaporated before the ground
+(virga). Compare the mosaic against a single-radar **lowest-tilt** stack over
+the same event to flag it:
+
+```bash
+# 1) the local low-tilt reference (dual-pol R(Kdp), hail/DSD-robust)
+python -m stormscape nexrad --intensity --method kdp --aoi fire.geojson     --start 202608131830 --end 202608140500 --out-dir ./out --key krgx13
+
+# 2) classify each cell of the MRMS field against it
+python -m stormscape virga --mosaic out/rasters/event_i15max.tif     --support out/rasters/krgx13_i15max.tif --radar KRGX --out-dir ./out --key ev13
+```
+
+Classes in `<key>_virgarisk.tif`: **0 supported** (agree within `--ratio`,
+default 3×), **1 virga risk** (mosaic ≥ 3× the low tilt — intensity exists only
+aloft), **2 under-read** (the local base scan saw ≥ 3× more than the mosaic —
+shallow cells the hybrid scan discounted), **255 nodata** (missing, both below
+`--min-mmph`, or within `--exclude-km` of the radar, where the gridded base
+tilt is itself unreliable). `<key>_supportratio.tif` carries the raw ratio.
+The mask is a screen, not a verdict: it says *check this cell*, with gauges or
+field evidence the arbiter.
+
 ### Zoom into a sub-region of a processed event
 
 Once an event is processed, **don't re-run to zoom in** — MRMS has no finer
