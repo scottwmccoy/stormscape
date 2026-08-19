@@ -992,7 +992,10 @@ def virtual_gauge_timeseries(points, start: datetime, end: datetime,
         for k, (si, off) in enumerate(low):
             dbz = sample_radar_at_points(sub, g, field="reflectivity", sweep=k)
             rz = z_to_rate(dbz, a=a, b=b, dbz_cap=dbz_cap)
-            if kdp_ok:
+            if kdp_ok and method == "kdp":
+                # NOTE: kdp_ok is also true for method="hydro" (the retrieval
+                # is shared), so this branch must key on the METHOD -- keying
+                # on kdp_ok alone silently turned hydro vgauges into kdp ones.
                 kv = sample_radar_at_points(sub, g, field="kdp", sweep=k)
                 rk = _RKDP_S[0] * np.where(np.isfinite(kv) & (kv > 0), kv, 0.0
                                            ) ** _RKDP_S[1]
