@@ -221,3 +221,37 @@ def test_date_is_no_longer_mandatory(cmd, capsys):
         cli.main([cmd, "--help"])
     out = capsys.readouterr().out
     assert "--date" in out and "optional if --start/--end" in out
+
+
+# --------------------------------------------------------------------------- #
+# nexrad --pad-deg reaches the stack (regression: accepted, silently ignored)
+# --------------------------------------------------------------------------- #
+class _Probe(Exception):
+    """Stops _cmd_nexrad right after the call under test records its kwargs."""
+
+
+def _run_nexrad_intensity(monkeypatch, tmp_path, extra):
+    from stormscape import nexrad
+    record = {}
+
+    def fake_stack(aoi, start, end, **kw):
+        record.update(kw)
+        raise _Probe
+
+    monkeypatch.setattr(nexrad, "intensity_stack", fake_stack)
+    with pytest.raises(_Probe):
+        cli.main(["nexrad", "--intensity",
+                  "--bbox", "-120", "39", "-119", "40",
+                  "--start", "202606192000", "--end", "202606200200",
+                  "--radar", "KRGX", "--out-dir", str(tmp_path)] + extra)
+    return record
+
+
+def test_nexrad_pad_deg_is_forwarded_to_the_stack(monkeypatch, tmp_path):
+    kw = _run_nexrad_intensity(monkeypatch, tmp_path, ["--pad-deg", "0.06"])
+    assert kw["pad_deg"] == pytest.approx(0.06)
+
+
+def test_nexrad_default_pad_deg_reaches_the_stack(monkeypatch, tmp_path):
+    kw = _run_nexrad_intensity(monkeypatch, tmp_path, [])
+    assert kw["pad_deg"] == pytest.approx(0.05)

@@ -103,3 +103,69 @@ def test_radar_location_agrees_with_nearest_radar():
 def test_radar_location_rejects_an_unknown_id():
     with pytest.raises(Exception):
         nexrad.radar_location("ZZZZ")
+
+
+# --------------------------------------------------------------------------- #
+# pad_deg reaches the AOI load
+# (regression: ``nexrad --pad-deg`` was accepted and silently ignored, so
+#  gauges just outside the AOI fell off the grid with no warning)
+# --------------------------------------------------------------------------- #
+class _Probe(Exception):
+    """Raised by the recording load_aoi to stop before any network call."""
+
+
+def _probe_load_aoi(record):
+    def fake(spec, layer=None, pad_deg=0.0):
+        record.append(pad_deg)
+        raise _Probe
+    return fake
+
+
+def _offline(monkeypatch, record):
+    monkeypatch.setattr(nexrad, "available_scans", lambda *a, **k: [object()])
+    monkeypatch.setattr(nexrad, "download_scans", lambda *a, **k: [])
+    monkeypatch.setattr(nexrad, "load_aoi", _probe_load_aoi(record))
+
+
+def test_intensity_stack_pads_the_aoi(monkeypatch):
+    record = []
+    _offline(monkeypatch, record)
+    with pytest.raises(_Probe):
+        nexrad.intensity_stack((-120, 39, -119, 40), None, None,
+                               radar="KRGX", pad_deg=0.06)
+    assert record == [0.06]
+
+
+def test_intensity_stack_default_pad_mirrors_mrms(monkeypatch):
+    """i15_storm_day pads 0.05 by default; its Level II analogue must agree."""
+    record = []
+    _offline(monkeypatch, record)
+    with pytest.raises(_Probe):
+        nexrad.intensity_stack((-120, 39, -119, 40), None, None, radar="KRGX")
+    assert record == [0.05]
+
+
+def test_reflectivity_composite_pads_the_aoi(monkeypatch):
+    record = []
+    _offline(monkeypatch, record)
+    with pytest.raises(_Probe):
+        nexrad.reflectivity_composite((-120, 39, -119, 40), None, None,
+                                      radar="KRGX", pad_deg=0.06)
+    assert record == [0.06]
+
+
+def test_lowest_tilt_grid_pads_the_aoi(monkeypatch):
+    """load_aoi is the first statement, so no Radar object is needed."""
+    record = []
+    monkeypatch.setattr(nexrad, "load_aoi", _probe_load_aoi(record))
+    with pytest.raises(_Probe):
+        nexrad.lowest_tilt_grid(None, (-120, 39, -119, 40), pad_deg=0.02)
+    assert record == [0.02]
+
+
+def test_beam_blockage_pads_the_aoi(monkeypatch):
+    record = []
+    monkeypatch.setattr(nexrad, "load_aoi", _probe_load_aoi(record))
+    with pytest.raises(_Probe):
+        nexrad.beam_blockage(None, (-120, 39, -119, 40), None, pad_deg=0.02)
+    assert record == [0.02]

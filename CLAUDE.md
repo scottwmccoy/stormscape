@@ -991,6 +991,29 @@ in `README.md`.
   13 Aug 2026 event: Paiute → virga_risk, SR445 valley → under-read, Big Mouth
   core → supported. Tests: `tests/test_virga.py` (truth table, drizzle rule,
   inclusive ratio, regrid, exclusion ring, CLI smoke).
+- **`nexrad --pad-deg` was accepted and silently ignored (fixed 2026-08-20).**
+  Every `nexrad` grid path — `intensity_stack`, `reflectivity_composite`,
+  `reflectivity_field`/`lowest_tilt_grid`, `beam_blockage` — called
+  `load_aoi(aoi)` bare, so the CLI's `--pad-deg` (default 0.05, same flag the
+  MRMS commands honour) never reached the grid: outputs came out clipped to the
+  bare AOI bounds with no warning. **Found by a consumer, twice in one
+  session:** gridding the Hidden Valley 19 Jun 2026 storm, three wet gauges
+  just outside the AOI polygon (DESN2, NV044, NV045 Six Mile Canyon — one of
+  the debris-flow core gauges) fell off the grid, and a re-run with
+  `--pad-deg 0.06` produced byte-identical bounds. Fix: the AOI-level
+  functions take `pad_deg` and forward it to `load_aoi` — **default 0.05,
+  mirroring `mrms.i15_storm_day`** — and the CLI passes `args.pad_deg` at all
+  three call sites; the radar-object-level helpers (`lowest_tilt_grid`,
+  `beam_blockage`) take `pad_deg=0.0` as a pass-through. `nearest_radar` stays
+  unpadded (a symmetric pad cannot move the centroid). NB the new default
+  means default-flag `nexrad` grids now extend ~0.05° past the AOI like the
+  MRMS products always have — and since the AEQD grid is anchored to the
+  padded extent, changing the pad shifts cell alignment, which can move
+  single-cell point samples in convective gradients by ~2× (measured at HV;
+  field statistics unchanged to two digits). Quote basin/areal values, not
+  single cells. Tests: plumbing probes in `tests/test_nexrad.py` (each
+  function records the `pad_deg` its `load_aoi` receives; the default pinned
+  to 0.05) + CLI forwarding in `tests/test_cli.py`.
 - **Near-real-time burn severity (`burn.py`, CLI `burn`, 2026-08-14) — CIMSS
   BRISK.** Puts a scar under the rain *while the fire is still burning*, which the
   authoritative products cannot: BAER soil burn severity lands days-to-weeks after
