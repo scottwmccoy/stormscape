@@ -301,7 +301,7 @@ def _radar_meta_id(radar) -> str:
 
 
 def lowest_tilt_grid(radar, aoi, field: str = "reflectivity", sweep: int = 0,
-                     res_m: float = 500.0) -> dict:
+                     res_m: float = 500.0, pad_deg: float = 0.0) -> dict:
     """Grid one elevation tilt of a Py-ART ``Radar`` over the AOI.
 
     ``sweep=0`` is the lowest tilt (~0.5 deg) -- the radar's closest look at the
@@ -309,7 +309,7 @@ def lowest_tilt_grid(radar, aoi, field: str = "reflectivity", sweep: int = 0,
     (``fields={'refl': ...}`` for reflectivity) compatible with
     :func:`stormscape.mrms.save_fields` / :func:`stormscape.plot.drape_i15`.
     """
-    bounds, _ = load_aoi(aoi)
+    bounds, _ = load_aoi(aoi, pad_deg=pad_deg)
     rlat = float(radar.latitude["data"][0])
     rlon = float(radar.longitude["data"][0])
     xs, ys, crs = _extent_for(rlat, rlon, bounds, res_m)
@@ -328,7 +328,7 @@ def lowest_tilt_grid(radar, aoi, field: str = "reflectivity", sweep: int = 0,
 def reflectivity_field(aoi, when: datetime, radar: Optional[str] = None,
                        field: str = "reflectivity", sweep: int = 0,
                        res_m: float = 500.0, cache_dir: str = "nexrad_cache",
-                       search_min: float = 20.0) -> dict:
+                       search_min: float = 20.0, pad_deg: float = 0.05) -> dict:
     """One scan nearest ``when``: nearest radar -> download -> grid lowest tilt.
 
     The single-scan analogue of :func:`stormscape.mrms.i15_storm_day`.
@@ -337,7 +337,7 @@ def reflectivity_field(aoi, when: datetime, radar: Optional[str] = None,
     scan = nearest_scan(rid, when, search_min=search_min)
     path = download_scans([scan], cache_dir)[0]
     res = lowest_tilt_grid(read_sweep(path), aoi, field=field, sweep=sweep,
-                           res_m=res_m)
+                           res_m=res_m, pad_deg=pad_deg)
     res["meta"].update(radar=rid, scan_time=_iso(scan.scan_time),
                        requested=_iso(when))
     return res
@@ -347,7 +347,7 @@ def reflectivity_composite(aoi, start: datetime, end: datetime,
                            radar: Optional[str] = None,
                            field: str = "reflectivity", sweep: int = 0,
                            res_m: float = 500.0, cache_dir: str = "nexrad_cache",
-                           max_scans: int = 40) -> dict:
+                           max_scans: int = 40, pad_deg: float = 0.05) -> dict:
     """Per-cell **maximum** of the lowest tilt over every scan in the window.
 
     The "storm-peak reflectivity" map -- the single-radar analogue of the i15
@@ -361,7 +361,7 @@ def reflectivity_composite(aoi, start: datetime, end: datetime,
     if max_scans and len(scans) > max_scans:
         scans = scans[::int(np.ceil(len(scans) / max_scans))]
     paths = download_scans(scans, cache_dir)
-    bounds, _ = load_aoi(aoi)
+    bounds, _ = load_aoi(aoi, pad_deg=pad_deg)
     rlat, rlon, _ = radar_location(rid)
     xs, ys, crs = _extent_for(rlat, rlon, bounds, res_m)
     acc, n = None, 0
@@ -731,7 +731,8 @@ def intensity_stack(aoi, start: datetime, end: datetime,
                     durations=(15, 30, 60), cache_dir: str = "nexrad_cache",
                     elev_tol: float = 0.25, method: str = "za",
                     z_blend: float = 35.0, rate_cap: Optional[float] = None,
-                    blockage_dem=None, cbb_max: float = 0.5) -> dict:
+                    blockage_dem=None, cbb_max: float = 0.5,
+                    pad_deg: float = 0.05) -> dict:
     """Single-radar **i15/i30/i60** stack from Level II -- the MRMS analogue.
 
     For every volume in ``[start, end]`` the lowest-tilt reflectivity (all SAILS
@@ -758,7 +759,7 @@ def intensity_stack(aoi, start: datetime, end: datetime,
     if not scans:
         raise ValueError(f"no {rid} scans in [{_iso(start)}, {_iso(end)}]")
     paths = download_scans(scans, cache_dir)
-    bounds, _ = load_aoi(aoi)
+    bounds, _ = load_aoi(aoi, pad_deg=pad_deg)
     rlat, rlon, _ = radar_location(rid)
     xs, ys, crs = _extent_for(rlat, rlon, bounds, res_m)
 
@@ -915,14 +916,14 @@ def _blockage_cbb(radar, dem_path, sweep, xs, ys, beamwidth=0.925):
 
 
 def beam_blockage(radar, aoi, dem, sweep: int = 0, res_m: float = 500.0,
-                  beamwidth: float = 0.925) -> dict:
+                  beamwidth: float = 0.925, pad_deg: float = 0.0) -> dict:
     """Cumulative beam-blockage (0-1) over the AOI for ``radar`` at ``sweep``.
 
     Geometry-only (time-independent): a DEM-derived quality field flagging where
     terrain blocks the beam -- the single-radar analogue of MRMS RQI. Returns a
     result dict (``fields={'cbb': ...}``) in EPSG:4326.
     """
-    bounds, _ = load_aoi(aoi)
+    bounds, _ = load_aoi(aoi, pad_deg=pad_deg)
     rlat = float(radar.latitude["data"][0])
     rlon = float(radar.longitude["data"][0])
     xs, ys, crs = _extent_for(rlat, rlon, bounds, res_m)

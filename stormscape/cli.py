@@ -999,7 +999,8 @@ def _cmd_nexrad(args):
                               sweep=args.sweep, res_m=args.res_m, cache_dir=cache,
                               method=args.method, z_blend=args.z_blend,
                               rate_cap=args.rate_cap,
-                              blockage_dem=args.blockage_dem, cbb_max=args.cbb_max)
+                              blockage_dem=args.blockage_dem, cbb_max=args.cbb_max,
+                              pad_deg=args.pad_deg)
         paths = save_fields(res, args.out_dir, key)
         field_tif = out_path(args.out_dir, f"{key}_i15max.tif")
         cbar = "peak 15-min intensity  i15  (mm h$^{-1}$)"
@@ -1009,7 +1010,8 @@ def _cmd_nexrad(args):
         res = reflectivity_composite(aoi, start, end, radar=radar,
                                      field=args.field, sweep=(args.sweep or 0),
                                      res_m=args.res_m, cache_dir=cache,
-                                     max_scans=args.max_scans)
+                                     max_scans=args.max_scans,
+                                     pad_deg=args.pad_deg)
         paths = save_fields(res, args.out_dir, key)
         field_tif = paths[0]
         cbar = _dbz_label(args.field)
@@ -1017,7 +1019,8 @@ def _cmd_nexrad(args):
     else:                                    # single scan nearest a time
         res = reflectivity_field(aoi, _nexrad_when(args), radar=radar,
                                  field=args.field, sweep=(args.sweep or 0),
-                                 res_m=args.res_m, cache_dir=cache)
+                                 res_m=args.res_m, cache_dir=cache,
+                                 pad_deg=args.pad_deg)
         paths = save_fields(res, args.out_dir, key)
         field_tif = paths[0]
         cbar = _dbz_label(args.field)
