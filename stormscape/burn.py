@@ -679,6 +679,13 @@ def burn_severity(aoi, date=None, product: str = "dnbr", scheme: str = "usgs",
                 product=product, scheme=scheme if not categorical else "baer",
                 fires=list(scenes.fire), states=list(scenes.state),
                 scene_dates=[str(d) for d in scenes.date],
+                # Days from the fire's FIRST appearance in BRISK to this
+                # scene -- the clock MATURITY_DAYS is measured on. Exported
+                # because a caller cannot reconstruct it: it is not the age
+                # of the file, and a composite fetched the day it is posted
+                # can be either a 2-day-old burn or a 2-month-old one.
+                scene_age_days=([int(a) for a in scenes.age_days]
+                                if "age_days" in scenes else []),
                 scenes=[os.path.basename(p) for p in paths],
                 burned_px=int(finite.size),
                 dnbr_max=float(finite.max()) if finite.size else float("nan"),
