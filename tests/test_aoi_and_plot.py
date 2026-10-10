@@ -267,3 +267,104 @@ def test_interior_point_accepts_a_multipolygon():
     mp = MultiPolygon([Polygon([(1, 1), (5, 1), (5, 5)]),
                        Polygon([(40, 40), (60, 40), (60, 60), (40, 60)])])
     assert plot.interior_point(mp, (0, 0, 100, 100)) is not None
+
+
+# --------------------------------------------------------------------------- #
+# lat/long scale ticks
+# --------------------------------------------------------------------------- #
+UTM11 = "EPSG:32611"
+# statewide Nevada, where convergence put the old ticks 12.4 km off; and the
+# Hidden Valley AOI (-119.72, 39.45, -119.63, 39.53) plus ~50 m, 2.7° off the
+# central meridian, where they were ~130 m off
+WIDE = (221460, 774900, 3867480, 4659840)
+SMALL = (265900, 274000, 4370200, 4378900)
+
+
+@pytest.fixture()
+def tick_ax():
+    """Factory: an axis framed on a UTM 11N extent, with scale ticks added."""
+    import matplotlib.pyplot as plt
+
+    figs = []
+
+    def make(extent):
+        fig, ax = plt.subplots(figsize=(9, 8.5))
+        figs.append(fig)
+        ax.set_xlim(extent[0], extent[1])
+        ax.set_ylim(extent[2], extent[3])
+        plot._add_scale_ticks(ax, UTM11)
+        return ax
+
+    yield make
+    for fig in figs:
+        plt.close(fig)
+
+
+def _deg(label):
+    """'119.70°W' -> -119.7."""
+    value, hemi = label.split("°")
+    return -float(value) if hemi in ("W", "S") else float(value)
+
+
+def _edge_crossing(lon=None, lat=None, at=None):
+    """Truth by root-finding, independent of the interpolation under test: the
+    projected x where meridian ``lon`` reaches northing ``at``, or the projected
+    y where parallel ``lat`` reaches easting ``at``."""
+    from pyproj import Transformer
+    from scipy.optimize import brentq
+
+    fwd = Transformer.from_crs("EPSG:4326", UTM11, always_xy=True)
+    if lon is not None:
+        la = brentq(lambda la: fwd.transform(lon, la)[1] - at, 0, 80, xtol=1e-12)
+        return fwd.transform(lon, la)[0]
+    lo = brentq(lambda lo: fwd.transform(lo, lat)[0] - at, -130, -100, xtol=1e-12)
+    return fwd.transform(lo, lat)[1]
+
+
+@pytest.mark.parametrize("extent, meridian", [(WIDE, "120°W"), (WIDE, "114°W"),
+                                              (SMALL, "119.70°W")])
+def test_a_longitude_tick_sits_on_its_meridian_at_the_bottom_edge(
+        tick_ax, extent, meridian):
+    ax = tick_ax(extent)
+    ticks = dict(zip([t.get_text() for t in ax.get_xticklabels()],
+                     ax.get_xticks()))
+    assert meridian in ticks
+    assert ticks[meridian] == pytest.approx(
+        _edge_crossing(lon=_deg(meridian), at=extent[2]), abs=1.0)
+
+
+@pytest.mark.parametrize("extent", [WIDE, SMALL])
+def test_every_tick_sits_on_its_line_at_the_frame_edge(tick_ax, extent):
+    ax = tick_ax(extent)
+    xl = [t.get_text() for t in ax.get_xticklabels()]
+    yl = [t.get_text() for t in ax.get_yticklabels()]
+    assert len(xl) >= 3 and len(yl) >= 3
+    for lab, x in zip(xl, ax.get_xticks()):
+        assert x == pytest.approx(_edge_crossing(lon=_deg(lab), at=extent[2]),
+                                  abs=1.0), lab
+    for lab, y in zip(yl, ax.get_yticks()):
+        assert y == pytest.approx(_edge_crossing(lat=_deg(lab), at=extent[0]),
+                                  abs=1.0), lab
+
+
+def test_tick_labels_carry_only_the_decimals_the_step_needs(tick_ax):
+    assert [t.get_text() for t in tick_ax(WIDE).get_xticklabels()] == [
+        "120°W", "118°W", "116°W", "114°W"]
+    assert [t.get_text() for t in tick_ax(SMALL).get_xticklabels()] == [
+        "119.72°W", "119.70°W", "119.68°W", "119.66°W", "119.64°W"]
+    # a 0.1° step: one decimal, not "117.30°W"
+    ax = tick_ax((486000, 516000, 4361000, 4391000))
+    assert [t.get_text() for t in ax.get_xticklabels()] == [
+        "117.1°W", "117.0°W", "116.9°W"]
+
+
+def test_scale_ticks_never_stretch_the_frame(tick_ax):
+    """A round line just outside the frame used to get a tick anyway, and
+    set_xticks/set_yticks then widened the axis to reach it."""
+    from pyproj import Transformer
+
+    fwd = Transformer.from_crs("EPSG:4326", UTM11, always_xy=True)
+    (x0, x1), (y0, y1) = fwd.transform([-117.3, -116.95], [39.4, 39.67])
+    ax = tick_ax((x0, x1, y0, y1))
+    assert ax.get_xlim() == (x0, x1)
+    assert ax.get_ylim() == (y0, y1)

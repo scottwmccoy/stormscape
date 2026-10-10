@@ -849,13 +849,17 @@ def _prepare_hillshade(hillshade, work_crs="UTM", max_px=2600):
 
 
 def _add_scale_ticks(ax, work_crs):
-    """Latitude/longitude tick marks, placed through the figure CRS.
+    """Latitude/longitude tick marks where each meridian and parallel meets the frame.
 
-    Ticks sit at round lon/lat values, positioned at the projected coordinate of
-    each meridian/parallel at the view centre. In a near-conformal local CRS
-    (UTM) meridian convergence is small, so the labels are accurate to far
-    better than their 0.01-degree precision; in a strongly-convergent CRS
-    (e.g. CONUS Albers far from its central meridian) prefer plotting in UTM.
+    Each longitude tick sits where its meridian crosses the bottom axis edge and
+    each latitude tick where its parallel crosses the left edge: the line is
+    sampled densely in lon/lat, projected through ``work_crs``, and
+    interpolated at the edge coordinate. Ticks used to sit at the projected
+    meridian/parallel at the view center, which ignores meridian convergence:
+    on a statewide Nevada map in UTM 11N the 120°W and 114°W ticks landed
+    12.4 km from where their meridians cross the bottom edge. Labels carry as
+    many decimals as the step needs ("120°W" for whole-degree steps,
+    "119.70°W" for 0.02°).
     """
     import math
 
@@ -867,20 +871,38 @@ def _add_scale_ticks(ax, work_crs):
     lls = [inv.transform(xx, yy) for xx in (x0, x1) for yy in (y0, y1)]
     lons, lats = [p[0] for p in lls], [p[1] for p in lls]
     lon0, lon1, lat0, lat1 = min(lons), max(lons), min(lats), max(lats)
-    lonm, latm = (lon0 + lon1) / 2, (lat0 + lat1) / 2
 
     def _step(span):
         return next((s for s in (0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5)
                      if span / 5 <= s), 10)
+
+    def _label(v, step, pos, neg):
+        nd = next(d for d in range(4) if abs(round(step, d) - step) < 1e-9)
+        v = round(v, nd)
+        return f"{abs(v):.{nd}f}°{neg if v < 0 else pos}"
+
+    # sample each line well past the view so it reaches the edge wherever it
+    # crosses; 2001 points keep the interpolation sub-millimeter statewide
+    lat_s = np.linspace(2 * lat0 - lat1, 2 * lat1 - lat0, 2001)
+    lon_s = np.linspace(2 * lon0 - lon1, 2 * lon1 - lon0, 2001)
     ls, ts = _step(lon1 - lon0), _step(lat1 - lat0)
-    lon_t = np.arange(math.ceil(lon0 / ls) * ls, lon1 + 1e-9, ls)
-    lat_t = np.arange(math.ceil(lat0 / ts) * ts, lat1 + 1e-9, ts)
-    ax.set_xticks([fwd.transform(lo, latm)[0] for lo in lon_t])
-    ax.set_yticks([fwd.transform(lonm, la)[1] for la in lat_t])
-    ax.set_xticklabels([f"{abs(lo):.2f}°{'W' if lo < 0 else 'E'}"
-                        for lo in lon_t])
-    ax.set_yticklabels([f"{abs(la):.2f}°{'N' if la >= 0 else 'S'}"
-                        for la in lat_t])
+    xt, xl, yt, yl = [], [], [], []
+    for lo in np.arange(math.ceil(lon0 / ls) * ls, lon1 + 1e-9, ls):
+        xs, ys = fwd.transform(np.full_like(lat_s, lo), lat_s)
+        x = np.interp(y0, ys, xs, left=np.nan, right=np.nan)  # meets bottom edge
+        if x0 <= x <= x1:              # a meridian leaving by a side edge gets no tick
+            xt.append(x)
+            xl.append(_label(lo, ls, "E", "W"))
+    for la in np.arange(math.ceil(lat0 / ts) * ts, lat1 + 1e-9, ts):
+        xs, ys = fwd.transform(lon_s, np.full_like(lon_s, la))
+        y = np.interp(x0, xs, ys, left=np.nan, right=np.nan)  # meets left edge
+        if y0 <= y <= y1:
+            yt.append(y)
+            yl.append(_label(la, ts, "N", "S"))
+    ax.set_xticks(xt)
+    ax.set_yticks(yt)
+    ax.set_xticklabels(xl)
+    ax.set_yticklabels(yl)
     ax.tick_params(direction="out", length=4, labelsize=7)
 
 
