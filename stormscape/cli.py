@@ -172,6 +172,8 @@ def _cmd_run(args):
             gpath = out_path(args.out_dir, f"{key}_gauges.geojson")
             g.to_file(gpath, driver="GeoJSON")
             print(f"wrote {gpath}  ({len(g)} gauges)")
+            from .gauges import write_access_report
+            write_access_report(args.out_dir, key)
             gauges_gdf = g
         else:
             print(f"no gauges found in AOI for {start} to {end}")
