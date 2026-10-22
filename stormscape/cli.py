@@ -35,6 +35,11 @@ from .layout import find, find_subdir, out_path, subdir
 from .mines import DEFAULT_KINDS as _MINE_DEFAULT_KINDS
 
 
+
+#: What `run` stacks (MRMS PrecipRate, radar-only). Named on every radar
+#: figure so a map never just says "radar" while two radar products exist.
+RADAR_LABEL = "MRMS radar-only"
+
 def _aoi_from_args(args):
     if args.bbox:
         return tuple(args.bbox)
@@ -172,6 +177,8 @@ def _cmd_run(args):
             gpath = out_path(args.out_dir, f"{key}_gauges.geojson")
             g.to_file(gpath, driver="GeoJSON")
             print(f"wrote {gpath}  ({len(g)} gauges)")
+            from .gauges import write_access_report
+            write_access_report(args.out_dir, key)
             gauges_gdf = g
         else:
             print(f"no gauges found in AOI for {start} to {end}")
@@ -210,12 +217,14 @@ def _cmd_run(args):
                   cmap=args.cmap, wet_min=args.wet_min,
                   perimeters=args.perimeters,
                   gauges=table, gauge_value="resid_i15max",
+                  gauge_label=f"{RADAR_LABEL} - gauge  i$_{{15}}$  (mm h$^{{-1}}$)",
+                  cbar_label=f"{RADAR_LABEL} peak 15-min intensity  (mm h$^{{-1}}$)",
                   reference=args.reference, local_roads=args.local_roads,
                   label_reference=not args.no_reference_labels,
                   alpha=args.alpha, north_arrow=True, scale_ticks=True,
                   legend="gauges",
                   clip=clip, clip_margin=args.clip_margin, dpi=args.dpi,
-                  title=f"{key}  -  radar - gauge  i15  ({_event_label(args)})")
+                  title=f"{key}  -  {RADAR_LABEL} minus gauge  i15  ({_event_label(args)})")
         print(f"wrote {cmp_png}")
 
 
@@ -419,11 +428,13 @@ def _cmd_compare(args):
         drape_i15(args.hillshade, i15_tif, out_path=args.map,
                   work_crs="UTM", cmap=args.cmap, gauges=table,
                   gauge_value=f"resid_{args.map_metric}",
+                  gauge_label=f"{args.radar_label} - gauge  (mm h$^{{-1}}$)",
+                  cbar_label=f"{args.radar_label} peak 15-min intensity  (mm h$^{{-1}}$)",
                   perimeters=args.perimeters,
                   clip=(args.perimeters if args.clip else None),
                   reference=args.reference, alpha=args.alpha,
                   north_arrow=True, scale_ticks=True, legend="gauges",
-                  title=args.title or f"radar - gauge  ({args.map_metric})")
+                  title=args.title or f"{args.radar_label} minus gauge  ({args.map_metric})")
         print(f"wrote {args.map}")
     return out_csv
 
@@ -2388,6 +2399,10 @@ def main(argv=None):
                          "(needs <radar-dir>/<key>_mstotal.tif)")
     pc.add_argument("--out", help="output CSV path for the per-gauge table")
     pc.add_argument("--map", help="also render a residual-map PNG to this path")
+    pc.add_argument("--radar-label", default=RADAR_LABEL,
+                    help="name of the radar product in --map titles and keys "
+                         "(default MRMS radar-only; e.g. 'NEXRAD KRGX R(Kdp)' "
+                         "when --radar-dir holds a nexrad --intensity stack)")
     pc.add_argument("--map-metric", default="i15max",
                     help="radar field for --map residuals (default i15max)")
     pc.add_argument("--hillshade",

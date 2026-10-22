@@ -149,6 +149,18 @@ in `README.md`.
   (403). Gauge transport + 1-min interpolation are vendored from USGS
   **FlowAlert** (CC0). Stations reporting no precip variable → NaN metrics
   (handle, don't crash).
+- **Synoptic access toggles; stormscape routes around it (2026-10-22).** The
+  academic tier gets widened and cut back without notice. Cut back, the token
+  keeps only the Basic Precipitation Service: `stations/metadata`, `latest` and
+  plain `timeseries` answer HTTP 200 with an embedded `RESPONSE_CODE 403`, and
+  only `timeseries?precip=1` works. Every call now goes through
+  `gauges.synoptic_get`, which spaces calls (`CALL_GAP_S`), retries a 403 once
+  (an overlapping call gets the same 403 text as a real denial), remembers a
+  service-access denial for the rest of the run, and raises with the time window
+  instead of returning nothing. `get_stations` falls back to a bbox `precip=1`
+  query (split on "too many station hours"). Each run writes
+  `<key>_synoptic_access.json` beside the gauge store. Never treat "no gauges
+  found" as real until that file says the route was ok.
 - **Gauge cadence (`report_min`) must be measured on *precip-bearing* obs.** A
   multi-variable ASOS (e.g. KRNO) reports temp/wind every 5 min but precip only
   at hourly METAR times; counting all obs would mislabel it 5-min and wrongly
@@ -159,6 +171,13 @@ in `README.md`.
   20260619 radar-only ran ~2.6× the gauges on storm total; MultiSensor ~2.0× —
   gauge correction roughly halves it, but point-vs-pixel leaves a residual gap,
   and cadence was *not* the driver of the large i15 gap (gauges already ≤15-min).
+- **nexradaws drops TODAY from a window that crosses UTC midnight.** It lists
+  day *i* as `start + i days` and skips that instant if it is in the future, so
+  a 20Z->08Z window listed the next morning loses the second day (2026-10-22:
+  54 of 161 KRGX volumes). `nexrad.available_scans` now asks one UTC day at a
+  time. Virtual-gauge series also leave minutes NaN when no two scans within
+  `MAX_SCAN_GAP_MIN` bracket them, instead of holding the last rate (which drew
+  an 8-hour straight ramp on the cumulative curve).
 - **NEXRAD Level II** (`nexrad.py`): transport is **nexradaws ≥2.0**, which points
   at the current **`unidata-nexrad-level2`** S3 bucket — the older
   `noaa-nexrad-level2` Big-Data bucket was deprecated (that's why hand-rolled S3

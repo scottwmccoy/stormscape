@@ -22,6 +22,7 @@ explicitly as ``token=`` or set ``$SYNOPTIC_TOKEN``.
 from __future__ import annotations
 
 import os
+import time
 import warnings
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -87,6 +88,106 @@ def _raise_for_synoptic(r: requests.Response) -> None:
     raise SynopticError(f"HTTP {r.status_code}: {msg}")
 
 
+class SynopticAccessError(SynopticError):
+    """The token cannot use this Synoptic service: a 403 that survived a retry."""
+
+
+#: Synoptic answers one request at a time per account, and a call that overlaps
+#: another gets the SAME 403 "does not have access to the requested service"
+#: text as a real denial. So calls are spaced, and a 403 is asked twice before
+#: it is believed.
+CALL_GAP_S = 2.0
+RETRY_403_S = 5.0
+_DENIED_TEXT = "does not have access to the requested service"
+
+#: What this process has learned about the token, route -> {status, message,
+#: checked_utc}. Per run only: access changes week to week on the academic tier,
+#: so nothing is cached to disk and an upgrade takes effect on the next run.
+_ACCESS: Dict[str, dict] = {}
+_LAST_CALL = [0.0]
+
+
+def access_report() -> Dict[str, dict]:
+    """Which Synoptic routes this run used, and what the server said."""
+    return {k: dict(v) for k, v in _ACCESS.items()}
+
+
+def reset_access() -> None:
+    """Forget learned access (tests; or after re-minting a token mid-session)."""
+    _ACCESS.clear()
+
+
+def write_access_report(out_dir: str, key: str, layout=None) -> Optional[str]:
+    """``<key>_synoptic_access.json`` next to the gauge store, if anything was asked."""
+    if not _ACCESS:
+        return None
+    import json
+    path = out_path(out_dir, f"{key}_synoptic_access.json", layout=layout)
+    with open(path, "w") as fh:
+        json.dump(access_report(), fh, indent=2)
+    return path
+
+
+def _note(route: str, status: str, message: str) -> None:
+    _ACCESS[route] = {"status": status, "message": message,
+                      "checked_utc": datetime.now(timezone.utc)
+                      .isoformat(timespec="seconds")}
+
+
+def _pace() -> None:
+    wait = CALL_GAP_S - (time.monotonic() - _LAST_CALL[0])
+    if wait > 0:
+        time.sleep(wait)
+    _LAST_CALL[0] = time.monotonic()
+
+
+def synoptic_get(route: str, url: str, params: dict, *, timeout: float = 120,
+                 context: str = "") -> dict:
+    """One Synoptic request -> parsed payload, or a clear error.
+
+    ``route`` names the service for the access record ("metadata",
+    "timeseries_precip"). Synoptic reports most failures *inside* an HTTP-200
+    body (``SUMMARY.RESPONSE_CODE``), which earlier code parsed as an empty
+    station list -- an access downgrade then read as "no gauges found". Here:
+
+    * a 403 is retried once after :data:`RETRY_403_S`, since an overlapping
+      call gets the same text as a real denial;
+    * a 403 that persists raises :class:`SynopticAccessError`; if its message
+      is the service-access text the route is remembered as denied for the
+      rest of the run, so later calls go straight to the fallback;
+    * any other server error raises :class:`SynopticError` with ``context``
+      (the time window), so a refusal of old data names the window it refused;
+    * "Querying too many station hours" is returned to the caller to split.
+    """
+    if _ACCESS.get(route, {}).get("status") == "denied":
+        raise SynopticAccessError(
+            f"{route}: denied earlier in this run ({_ACCESS[route]['message']})")
+    for attempt in (0, 1):
+        _pace()
+        r = requests.get(url, params=params, timeout=timeout)
+        _raise_for_synoptic(r)
+        payload = r.json()
+        summ = payload.get("SUMMARY", {}) or {}
+        code = summ.get("RESPONSE_CODE")
+        msg = str(summ.get("RESPONSE_MESSAGE", "") or "")
+        if code == 403 and attempt == 0:
+            time.sleep(RETRY_403_S)
+            continue
+        if code in (401, 403):
+            if _DENIED_TEXT in msg:
+                _note(route, "denied", msg)
+            raise SynopticAccessError(f"{route}{context}: Synoptic {code}: {msg}")
+        if code == -1 and "too many station hours" not in msg.lower():
+            raise SynopticError(f"{route}{context}: Synoptic {code}: {msg}")
+        _note(route, "ok", msg)
+        return payload
+    raise SynopticError(f"{route}{context}: no answer")     # pragma: no cover
+
+
+def _window(starttime, endtime) -> str:
+    return f" ({_utc(starttime):%Y-%m-%d %H:%M} to {_utc(endtime):%Y-%m-%d %H:%M} UTC)"
+
+
 def _stations_json_to_gdf(payload: dict, status: Optional[str]) -> gpd.GeoDataFrame:
     """Parse a Synoptic stations/metadata payload -> GeoDataFrame(EPSG:4326)."""
     cols = ["station_id", "name", "state", "elevation", "network", "provider",
@@ -129,7 +230,8 @@ def _timeseries_json_to_frames(payload: dict) -> Dict[str, pd.DataFrame]:
 # Synoptic transport (adapted from FlowAlert, CC0)
 # --------------------------------------------------------------------------- #
 def get_stations(aoi, token: Optional[str] = None, status: Optional[str] = "ACTIVE",
-                 pad_deg: float = 0.0) -> gpd.GeoDataFrame:
+                 pad_deg: float = 0.0, starttime: Optional[datetime] = None,
+                 endtime: Optional[datetime] = None) -> gpd.GeoDataFrame:
     """Synoptic stations within the AOI bbox -> GeoDataFrame(EPSG:4326).
 
     One row per station with ``station_id, name, state, elevation`` (m),
@@ -141,10 +243,55 @@ def get_stations(aoi, token: Optional[str] = None, status: Optional[str] = "ACTI
     """
     bounds, _ = load_aoi(aoi, pad_deg=pad_deg)
     bbox = ",".join(f"{v:.6f}" for v in bounds)
-    r = requests.get(META_URL, timeout=60,
-                     params={"token": _token(token), "bbox": bbox, "complete": "1"})
-    _raise_for_synoptic(r)
-    return _stations_json_to_gdf(r.json(), status)
+    tok = _token(token)
+    try:
+        payload = synoptic_get("metadata", META_URL, timeout=60, params={
+            "token": tok, "bbox": bbox, "complete": "1"})
+        return _stations_json_to_gdf(payload, status)
+    except SynopticAccessError as err:
+        meta_err = err
+    # A token on the free academic tier can be limited to the Basic
+    # Precipitation Service, which denies stations/metadata but still answers a
+    # bbox timeseries query with precip=1 -- and that response carries every
+    # station's metadata. Discover through it, over the event window when the
+    # caller has one, else the last day. Only stations with a precip sensor come
+    # back, which is the set the rainfall step can use anyway. Seen 2026-10-22:
+    # metadata/latest/plain timeseries all 403, precip=1 OK, 124 stations.
+    if endtime is None:
+        endtime = datetime.now(timezone.utc)
+    if starttime is None:
+        starttime = _utc(endtime) - pd.Timedelta(hours=24)
+    stations = _discover_via_precip(bbox, starttime, endtime, tok)
+    warnings.warn(f"{meta_err}; stations found via the precipitation service "
+                  "instead", stacklevel=2)
+    payload = ({"SUMMARY": {"RESPONSE_CODE": 1}, "STATION": stations}
+               if stations else {"SUMMARY": {"RESPONSE_CODE": 2}})
+    return _stations_json_to_gdf(payload, status)
+
+
+def _discover_via_precip(bbox: str, starttime: datetime, endtime: datetime,
+                         tok: str) -> List[dict]:
+    """Station records from a bbox precip=1 timeseries query, split when too big."""
+    fmt = "%Y%m%d%H%M"
+    payload = synoptic_get("timeseries_precip", TS_URL,
+                           context=_window(starttime, endtime), params={
+                               "token": tok, "bbox": bbox, "precip": "1",
+                               "start": _utc(starttime).strftime(fmt),
+                               "end": _utc(endtime).strftime(fmt),
+                               "obtimezone": "UTC"})
+    if "STATION" in payload:
+        return [{k: v for k, v in st.items() if k != "OBSERVATIONS"}
+                for st in payload["STATION"]]
+    msg = str(payload.get("SUMMARY", {}).get("RESPONSE_MESSAGE", ""))
+    if "too many station hours" in msg.lower():
+        mid = starttime + (endtime - starttime) / 2
+        seen = {}
+        for half in (_discover_via_precip(bbox, starttime, mid, tok),
+                     _discover_via_precip(bbox, mid, endtime, tok)):
+            for st in half:
+                seen.setdefault(str(st["STID"]), st)
+        return list(seen.values())
+    return []
 
 
 def get_rainfall(station_ids: Sequence[str], starttime: datetime,
@@ -168,11 +315,12 @@ def get_rainfall(station_ids: Sequence[str], starttime: datetime,
         "qc": "on", "qc_flags": "on", "qc_remove_data": "on",
         "units": "metric,precip|mm", "token": tok,
     }
-    r = requests.get(url, params=params, timeout=120)
-    _raise_for_synoptic(r)
-    payload = r.json()
+    payload = synoptic_get("timeseries_precip", url, params,
+                           context=_window(starttime, endtime))
     if "STATION" in payload:
         return _timeseries_json_to_frames(payload)
+    if payload.get("SUMMARY", {}).get("RESPONSE_CODE") == 2:    # zero results
+        return {}
 
     msg = payload.get("SUMMARY", {}).get("RESPONSE_MESSAGE", "")
     if "Querying too many station hours" in msg:       # split and recurse
@@ -318,7 +466,8 @@ def gauge_fields(aoi, starttime: datetime, endtime: datetime,
     EPSG:4326) with ``total_mm`` and ``i{d}_mmph`` columns -- ready to overlay
     on the radar figure or feed the radar-vs-gauge comparison.
     """
-    stations = get_stations(aoi, token=token, status=status, pad_deg=pad_deg)
+    stations = get_stations(aoi, token=token, status=status, pad_deg=pad_deg,
+                            starttime=starttime, endtime=endtime)
     if not len(stations):
         return stations
     ids: List[str] = stations["station_id"].tolist()
@@ -374,7 +523,8 @@ def gauge_timeseries(aoi, starttime, endtime, token: Optional[str] = None,
     the radar reducers), and ``df.attrs`` carries ``station_id``/``lon``/``lat``
     for matching against virtual gauges. Stations reporting no precip are skipped.
     """
-    stations = get_stations(aoi, token=token, status=status, pad_deg=pad_deg)
+    stations = get_stations(aoi, token=token, status=status, pad_deg=pad_deg,
+                            starttime=starttime, endtime=endtime)
     series: Dict[str, pd.DataFrame] = {}
     if not len(stations):
         return series, stations
@@ -445,7 +595,8 @@ def fetch_gauge_event(aoi, starttime, endtime, out_dir: str, key: str,
     calling :func:`gauge_fields` and :func:`gauge_timeseries` separately (which
     each hit Synoptic independently and could return different station sets).
     """
-    stations = get_stations(aoi, token=token, status=status, pad_deg=pad_deg)
+    stations = get_stations(aoi, token=token, status=status, pad_deg=pad_deg,
+                            starttime=starttime, endtime=endtime)
     if not len(stations):
         return stations, {}
     ids = stations["station_id"].tolist()
@@ -478,6 +629,7 @@ def fetch_gauge_event(aoi, starttime, endtime, out_dir: str, key: str,
     os.makedirs(out_dir, exist_ok=True)
     gpath = out_path(out_dir, f"{key}_gauges.geojson", layout=layout)
     gdf.to_file(gpath, driver="GeoJSON")
+    write_access_report(out_dir, key, layout=layout)
     if write_series:
         rgd = os.path.join(out_dir, "RainGaugeData")
         os.makedirs(rgd, exist_ok=True)

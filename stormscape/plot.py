@@ -385,8 +385,13 @@ def add_reference(ax, work_crs, streams=None, roads=None, places=None,
     return handles
 
 
+#: Rain-gauge marker area (pt^2). Was 120, which buried perimeters and
+#: neighbours wherever the network is dense (Reno, Oct 2026).
+GAUGE_SIZE = 60
+
+
 def add_gauges(ax, work_crs, gauges, value=None, cmap="turbo", vmin=None,
-               vmax=None, size=120, label="gauge", marker="o"):
+               vmax=None, size=GAUGE_SIZE, label="gauge", marker="o"):
     """Overlay rain gauges, optionally coloured by a value/residual column.
 
     ``gauges`` is a GeoDataFrame or vector path (e.g. from
@@ -422,7 +427,7 @@ def add_gauges(ax, work_crs, gauges, value=None, cmap="turbo", vmin=None,
     if finite.any():
         sc = ax.scatter(xs[finite], ys[finite], c=vals[finite], marker=marker,
                         s=size, cmap=cmap, vmin=vmin, vmax=vmax,
-                        edgecolor="white", linewidth=1.6, zorder=6.6)
+                        edgecolor="white", linewidth=1.0, zorder=6.6)
         handles.append(Line2D([], [], marker=marker, color="0.3", mec="white",
                               lw=0, markersize=10, label=label))
     return handles, sc
@@ -911,7 +916,7 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
               cbar_ticks=None, cbar_ticklabels=None,
               perimeters=None, basins=None, highlight=None, points=None,
               gauges=None, gauge_value=None, gauge_cmap=None, gauge_vmax=None,
-              gauge_label=None,
+              gauge_label=None, gauge_size=None,
               mines=None, mines_mode="auto", mines_kinds=None,
               mines_cell_km=1.0, mines_groups=None, mines_labels=False,
               stream_gauges=None, stream_value=None, stream_labels=False,
@@ -1128,7 +1133,7 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
 
     handles = []
     gauge_handles = []
-    resid_scatter, resid_label = None, None
+    resid_scatter, resid_label, resid_extend = None, None, "neither"
     stream_scatter = None
     bas = read_overlay(basins, work_crs)
     if bas is not None and len(bas):
@@ -1137,8 +1142,10 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
                               label="basin"))
     per = read_overlay(perimeters, work_crs)
     if per is not None and len(per):
-        per.boundary.plot(ax=ax, color="white", lw=2.4, zorder=3)
-        per.boundary.plot(ax=ax, color="black", lw=1.1, zorder=3)
+        # above the gauge markers (6.4-6.6): a dense network otherwise hides
+        # the burn edge, which is the line the reader is looking for
+        per.boundary.plot(ax=ax, color="white", lw=2.4, zorder=6.8)
+        per.boundary.plot(ax=ax, color="black", lw=1.1, zorder=6.9)
         handles.append(Line2D([], [], color="black", lw=1.5,
                               label="perimeter"))
     hl = read_overlay(highlight, work_crs)
@@ -1159,14 +1166,22 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
     gg = read_overlay(gauges, work_crs) if gauges is not None else None
     if gg is not None and len(gg):
         if gauge_value is None:
-            gh, _ = add_gauges(ax, work_crs, gg, label=gauge_label or "gauge")
+            gh, _ = add_gauges(ax, work_crs, gg, label=gauge_label or "gauge",
+                               size=gauge_size or GAUGE_SIZE)
         elif str(gauge_value).startswith("resid"):
             col = pd.to_numeric(gg.get(gauge_value), errors="coerce")
+            # 95th percentile of |residual|, not the max: one bad gauge (DRI
+            # NNSC, -101 mm/h on 21 Oct 2026) otherwise stretches the scale so
+            # every honest residual (-18..+10) prints near-white. Gauges past
+            # the limit saturate, and the color bar gets end arrows.
+            a = np.abs(col.dropna().to_numpy(dtype=float))
             m = (gauge_vmax if gauge_vmax is not None
-                 else (float(np.nanmax(np.abs(col))) if col.notna().any()
+                 else (max(float(np.percentile(a, 95)), 2.0) if a.size
                        else 1.0)) or 1.0
+            resid_extend = "both" if a.size and float(a.max()) > m else "neither"
             gh, gsc = add_gauges(ax, work_crs, gg, value=gauge_value,
                                  cmap=gauge_cmap or "RdBu_r", vmin=-m, vmax=m,
+                                 size=gauge_size or GAUGE_SIZE,
                                  label=gauge_label or "gauge (radar - gauge)")
             resid_scatter = gsc          # colour bar built tight to the map below
             resid_label = gauge_label or "radar - gauge  (mm h$^{-1}$)"
@@ -1174,6 +1189,7 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
             gh, _ = add_gauges(ax, work_crs, gg, value=gauge_value,
                                cmap=gauge_cmap or cmap, vmin=0,
                                vmax=gauge_vmax or vmax,
+                               size=gauge_size or GAUGE_SIZE,
                                label=gauge_label or "gauge")
         handles += gh
         gauge_handles = gh
@@ -1244,7 +1260,7 @@ def drape_i15(hillshade, i15, out_path=None, work_crs="EPSG:5070",
                      fontsize=10)
     if resid_scatter is not None:        # diverging radar-minus-gauge bar, left
         caxl = div.append_axes("left", size="4%", pad=0.75)
-        cbl = fig.colorbar(resid_scatter, cax=caxl)
+        cbl = fig.colorbar(resid_scatter, cax=caxl, extend=resid_extend)
         caxl.yaxis.set_ticks_position("left")
         caxl.yaxis.set_label_position("left")
         cbl.set_label(resid_label, fontsize=9)
