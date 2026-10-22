@@ -151,6 +151,11 @@ def _iso(t: datetime) -> str:
     return _utc(t).replace(microsecond=0).isoformat()
 
 
+#: Longest gap between volume scans that a 1-minute series interpolates
+#: across; wider gaps (outages, missing days) stay NaN rather than invented.
+MAX_SCAN_GAP_MIN = 20
+
+
 def available_scans(radar, start: datetime, end: datetime) -> list:
     """List archived volume scans for ``radar`` over ``[start, end]`` (UTC).
 
@@ -158,9 +163,28 @@ def available_scans(radar, start: datetime, end: datetime) -> list:
     Returns nexradaws ``AwsNexradFile`` objects (``.scan_time``, ``.filename``,
     ``.key`` ...) with the ``_MDM`` metadata-only entries filtered out.
     """
+    import datetime as _dt
     rid = _radar_id(radar)
-    scans = _conn().get_avail_scans_in_range(_utc(start), _utc(end), rid)
-    return [s for s in scans if not str(s.filename).endswith("_MDM")]
+    start, end = _utc(start), _utc(end)
+    # One UTC day per call. nexradaws builds its day list as start + i days and
+    # skips any of those instants that is in the future, so a window ending
+    # TODAY loses today entirely when its start time-of-day has not come round
+    # yet: 21 Oct 20Z -> 22 Oct 08Z, listed on the morning of the 22nd, returned
+    # only the 54 volumes of the 21st (the 22nd alone had 107). Each per-day
+    # call starts at that day's own start, which is never in the future.
+    scans, t = [], start
+    while t <= end:
+        day_end = min(end, _dt.datetime(t.year, t.month, t.day, 23, 59, 59,
+                                        tzinfo=t.tzinfo))
+        scans += _conn().get_avail_scans_in_range(t, day_end, rid)
+        t = _dt.datetime(t.year, t.month, t.day, tzinfo=t.tzinfo) + _dt.timedelta(days=1)
+    seen, out = set(), []
+    for sc in scans:
+        if str(sc.filename).endswith("_MDM") or sc.filename in seen:
+            continue
+        seen.add(sc.filename)
+        out.append(sc)
+    return out
 
 
 def download_scans(scans: Sequence, cache_dir: str = "nexrad_cache") -> List[str]:
@@ -1039,9 +1063,22 @@ def virtual_gauge_timeseries(points, start: datetime, end: datetime,
         s = pd.Series({pd.Timestamp(e, unit="s"): v
                        for e, v in sorted(rec[name])})
         s = s[~s.index.duplicated()].sort_index()
-        rate1 = (s.reindex(s.index.union(t1)).interpolate("time")
-                 .reindex(t1).fillna(0.0))
-        total = (rate1 / 60.0).cumsum()
+        rate1 = (s.reindex(s.index.union(t1)).interpolate("time", limit_area="inside")
+                 .reindex(t1))
+        # Only minutes BRACKETED by scans no more than MAX_SCAN_GAP apart carry
+        # a rate. pandas' time interpolation otherwise holds the last scan's
+        # rate to the end of the window, which turned a missing day of volumes
+        # into an 8-hour straight ramp on the cumulative curve (~10 mm that was
+        # never observed). Uncovered minutes stay NaN and break the curves.
+        st = s.index.values
+        k = np.searchsorted(st, t1.values, side="right")
+        prev = st[np.clip(k - 1, 0, len(st) - 1)]
+        nxt = st[np.clip(k, 0, len(st) - 1)]
+        exact = np.isin(t1.values, st)
+        covered = exact | ((k > 0) & (k < len(st))
+                           & ((nxt - prev) <= np.timedelta64(MAX_SCAN_GAP_MIN, "m")))
+        rate1 = rate1.where(covered)
+        total = (rate1.fillna(0.0) / 60.0).cumsum().where(covered)
         df = pd.DataFrame({"rate_mmph": rate1, "total_mm": total})
         for d in durations:
             if d == 15:
